@@ -50,9 +50,11 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -race -coverprofile=coverage.out
-      - uses: golangci/golangci-lint-action@v6
+      # v8 is the action line that speaks golangci-lint v2; the version is
+      # pinned so a lint release cannot turn a green branch red on its own.
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.13.2
 
   web:
     needs: detect
