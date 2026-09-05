@@ -83,11 +83,13 @@ The riskiest component comes first and needs no web code at all.
 ## Development
 
 ```bash
+cp .env.example .env
 docker compose up -d      # postgres + redis
 go test ./...
 ```
 
-Requires Docker running locally — the judge talks to the Docker daemon.
+Requires Docker running locally — the judge talks to the Docker daemon, and
+Postgres and Redis run as containers.
 
 ## Contributing
 
