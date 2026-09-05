@@ -84,12 +84,30 @@ The riskiest component comes first and needs no web code at all.
 
 ```bash
 cp .env.example .env
-docker compose up -d      # postgres + redis
+docker compose up --wait   # postgres + redis; blocks until both are healthy
 go test ./...
 ```
 
+`--wait` matters: with plain `-d` the services are merely started, not ready,
+and tests can connect before either accepts connections.
+
 Requires Docker running locally — the judge talks to the Docker daemon, and
 Postgres and Redis run as containers.
+
+### Resetting the database
+
+`POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` are read by the Postgres
+image only on first initialization, while the `postgres-data` volume is empty.
+Changing them in `.env` afterwards has no effect on a database that already
+exists.
+
+To make new credentials take, the volume has to go — **this destroys every
+local match, user and challenge row**:
+
+```bash
+docker compose down -v     # destructive: deletes postgres-data and redis-data
+docker compose up --wait
+```
 
 ## Contributing
 
