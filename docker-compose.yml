@@ -7,8 +7,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-devduel}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devduel}
       POSTGRES_DB: ${POSTGRES_DB:-devduel}
+    # Loopback only. The default credentials are throwaway, which is exactly
+    # why the port must not be reachable from the rest of the network.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    # The image reads POSTGRES_USER/PASSWORD/DB only while this volume is
+    # empty. Editing .env later leaves an initialized database untouched --
+    # see "Resetting the database" in the README.
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -20,8 +25,10 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
+    # Loopback only. The official Redis image ships with protected mode off
+    # and no password, so the bind address is the entire access boundary.
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
