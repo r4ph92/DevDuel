@@ -374,7 +374,11 @@ echo '##DEVDUEL_RESULTS##'`
 }
 
 func TestControlCommandsAreBoundedByTheCommandTimeout(t *testing.T) {
-	cli, _ := newCLI(t, "sleep 5", container.WithCommandTimeout(150*time.Millisecond))
+	// The backgrounded sleep is the point. Killing docker does not kill what
+	// docker started, and a surviving grandchild holds the output pipe open;
+	// without a wait delay the call blocks for the child's full lifetime
+	// instead of the timeout's.
+	cli, _ := newCLI(t, "sleep 5 &\nsleep 5", container.WithCommandTimeout(150*time.Millisecond))
 
 	start := time.Now()
 	err := cli.StartContainer(t.Context(), "runner")

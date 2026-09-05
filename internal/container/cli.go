@@ -18,6 +18,16 @@ const DefaultLogLimit = 256 << 10
 // is as long as the job it is waiting for.
 const DefaultCommandTimeout = 60 * time.Second
 
+// waitDelay bounds how long Run may spend after the deadline has already
+// fired.
+//
+// Cancelling the context kills docker, but it does not kill anything docker
+// started, and a surviving grandchild holds the inherited output pipe open.
+// Run waits for that pipe to close, so without this the call blocks long past
+// the timeout it is supposed to be enforcing — five seconds, in the test that
+// caught it. This is what makes the timeout mean what it says.
+const waitDelay = time.Second
+
 // CLI is a [Runtime] backed by the docker command-line binary.
 //
 // It holds no state between calls, so one CLI is safe to share across
@@ -214,6 +224,7 @@ func (c *CLI) exec(ctx context.Context, args []string) (*result, error) {
 	cmd := exec.CommandContext(ctx, c.binary, args...)
 	cmd.Stdout = res.stdout
 	cmd.Stderr = res.stderr
+	cmd.WaitDelay = waitDelay
 
 	err := cmd.Run()
 	if err == nil {
