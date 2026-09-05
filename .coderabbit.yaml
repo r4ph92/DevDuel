@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+
+reviews:
+  # "chill" keeps CodeRabbit from nitpicking every line. Switch to
+  # "assertive" if you want it to push harder.
+  profile: chill
+  # false = it comments, but never blocks the PR with a formal
+  # "changes requested". Leave it off while you're solo.
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_instructions:
+    - path: "internal/judge/**"
+      instructions: >-
+        This package orchestrates containers that execute untrusted,
+        potentially hostile code submitted by players. Flag anything that
+        weakens isolation: missing resource limits, containers with network
+        egress, dropped timeouts, unbounded output capture, or paths where a
+        container is not torn down on an error branch.
+    - path: "**/*.go"
+      instructions: >-
+        Flag unchecked errors, goroutine leaks, missing context propagation,
+        and any database write that should be inside a transaction. Match
+        Match state transitions must be idempotent.
+    - path: "web/**"
+      instructions: >-
+        The match timer is server-authoritative. Flag any client-side code
+        that computes match time or score locally instead of taking it from
+        the server.
+
+chat:
+  auto_reply: true

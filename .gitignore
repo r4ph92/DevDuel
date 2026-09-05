@@ -1,0 +1,25 @@
+# Go
+/bin/
+*.exe
+coverage.out
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local run artifacts
+/tmp/
+*.log
