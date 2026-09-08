@@ -153,6 +153,23 @@ func (s *Service) rehash(ctx context.Context, creds store.Credentials, password 
 	_ = s.db.SetPasswordHash(ctx, creds.UserID, upgraded)
 }
 
+// Authenticate resolves a session without renewing it. Only the canonical
+// encoding minted by Login is accepted; the raw token never reaches storage.
+func (s *Service) Authenticate(ctx context.Context, token string) (store.User, error) {
+	if len(token) != base64.RawURLEncoding.EncodedLen(tokenBytes) {
+		return store.User{}, ErrInvalidSession
+	}
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(token)
+	if err != nil || len(raw) != tokenBytes {
+		return store.User{}, ErrInvalidSession
+	}
+	user, err := s.db.SessionUser(ctx, Digest(token))
+	if errors.Is(err, store.ErrNotFound) {
+		return store.User{}, ErrInvalidSession
+	}
+	return user, err
+}
+
 // Logout ends a session. Ending one that is already gone is not an error.
 func (s *Service) Logout(ctx context.Context, token string) error {
 	return s.db.DeleteSession(ctx, Digest(token))

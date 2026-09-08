@@ -122,13 +122,26 @@ go run ./cmd/api
 The server does not migrate on boot, since several instances starting at once
 would all attempt it.
 
-Three routes exist so far, plus `GET /health`:
+Four routes exist so far, plus `GET /health`:
 
 ```
 POST /auth/register   {email, username, password} -> 201 {user}
 POST /auth/login      {email, password}           -> 200 {user, expires_at} + session cookie
 POST /auth/logout                                 -> 204
+GET  /me              session cookie              -> 200 {user}
 ```
+
+`GET /me` returns the signed-in user's ID, username, email and creation time.
+Missing, malformed, expired and revoked sessions all return `401` with code
+`unauthenticated`; database failures return `500`. Responses are marked
+`Cache-Control: no-store`. Requests neither renew sessions nor change cookies,
+including on authentication failure. Logout still clears the cookie.
+
+Protected routes use authentication middleware and read the account from the
+request context. Match and workspace routes must add resource authorization
+when they are introduced: a valid session alone does not grant access to
+another player's resources. Ratings and match history belong to the later
+profile endpoint.
 
 Passwords are argon2id, 64 MiB over two passes, with the parameters stored in
 the hash so raising them later leaves existing hashes verifiable; a login
