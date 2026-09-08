@@ -1,13 +1,8 @@
 package store_test
 
 import (
-	"context"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/r4ph92/DevDuel/internal/store"
 
 	"github.com/r4ph92/DevDuel/internal/id"
 	"github.com/r4ph92/DevDuel/internal/store/storetest"
@@ -18,83 +13,6 @@ import (
 // to uphold it does the wrong thing. That is the whole point of putting the
 // invariants in the database.
 
-// match is one seeded match with two players, enough to hang everything else
-// off.
-type match struct {
-	id        id.ID
-	players   [2]id.ID
-	challenge string
-	version   int
-}
-
-func seed(t *testing.T, db *store.Store) match {
-	t.Helper()
-	ctx := t.Context()
-
-	m := match{id: id.New(), challenge: "todo-api", version: 1}
-
-	const insertChallenge = `insert into challenges
-		(id, version, category, difficulty, duration, image_tag)
-		values ($1, $2, 'debugging', 'medium', '45 minutes', 'devduel/todo-api:1')`
-	if _, err := db.Pool().Exec(ctx, insertChallenge, m.challenge, m.version); err != nil {
-		t.Fatalf("insert challenge: %v", err)
-	}
-
-	const insertRequirement = `insert into requirements
-		(challenge_id, challenge_version, key, position, title, description, weight, broken)
-		values ($1, $2, 'health', 0, 'GET /health answers', 'it answers', 1, false)`
-	if _, err := db.Pool().Exec(ctx, insertRequirement, m.challenge, m.version); err != nil {
-		t.Fatalf("insert requirement: %v", err)
-	}
-
-	const insertMatch = `insert into matches (id, challenge_id, challenge_version, lobby_code)
-		values ($1, $2, $3, $4)`
-	if _, err := db.Pool().Exec(ctx, insertMatch, m.id, m.challenge, m.version, "LOBBY1"); err != nil {
-		t.Fatalf("insert match: %v", err)
-	}
-
-	for i := range m.players {
-		m.players[i] = seedUser(t, db)
-
-		const join = `insert into match_players (match_id, user_id, slot) values ($1, $2, $3)`
-		if _, err := db.Pool().Exec(ctx, join, m.id, m.players[i], i+1); err != nil {
-			t.Fatalf("insert match player: %v", err)
-		}
-	}
-	return m
-}
-
-func seedUser(t *testing.T, db *store.Store) id.ID {
-	t.Helper()
-
-	user := id.New()
-	const insert = `insert into users (id, email, username, password_hash)
-		values ($1, $2, $3, 'argon2id$placeholder')`
-	// The tail of the id, because a username is capped at 32 characters and
-	// the head of a version 7 uuid is the same for every id minted this hour.
-	name := "player-" + user.String()[24:]
-	if _, err := db.Pool().Exec(t.Context(), insert, user, name+"@example.test", name); err != nil {
-		t.Fatalf("insert user: %v", err)
-	}
-	return user
-}
-
-// appendEvent is how every writer must append: bump the match's allocator and
-// insert the event in one transaction. Nothing else produces a usable seq.
-func appendEvent(ctx context.Context, tx pgx.Tx, matchID id.ID, kind string) (int64, error) {
-	var seq int64
-	const allocate = `update matches set event_seq = event_seq + 1 where id = $1 returning event_seq`
-	if err := tx.QueryRow(ctx, allocate, matchID).Scan(&seq); err != nil {
-		return 0, err
-	}
-
-	const insert = `insert into match_events (match_id, seq, type) values ($1, $2, $3)`
-	if _, err := tx.Exec(ctx, insert, matchID, seq, kind); err != nil {
-		return 0, err
-	}
-	return seq, nil
-}
-
 // Resume is "everything after seq N", which is only sound if an event that
 // was delivered can never change or vanish.
 func TestMatchEventsCannotBeEditedOrRemoved(t *testing.T) {
@@ -103,15 +21,8 @@ func TestMatchEventsCannotBeEditedOrRemoved(t *testing.T) {
 	ctx := t.Context()
 	m := seed(t, db)
 
-	tx, err := db.Pool().Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if _, err := appendEvent(ctx, tx, m.id, "match.started"); err != nil {
+	if _, err := db.AppendEvent(ctx, m.id, "match.started", nil); err != nil {
 		t.Fatalf("append event: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit: %v", err)
 	}
 
 	for name, stmt := range map[string]string{
@@ -128,66 +39,6 @@ func TestMatchEventsCannotBeEditedOrRemoved(t *testing.T) {
 	// And deleting the match cannot be used to get around the trigger.
 	if _, err := db.Pool().Exec(ctx, `delete from matches where id = $1`, m.id); err == nil {
 		t.Error("deleting a match with events succeeded, want a refusal")
-	}
-}
-
-// Two writers appending at once must produce 1 and 2, not 1 and 1, and not
-// 1 and 3. A hole would make a reconnecting client wait forever for an event
-// that was never written.
-func TestMatchEventSequenceIsGaplessUnderConcurrency(t *testing.T) {
-	t.Parallel()
-	db := storetest.New(t)
-	ctx := t.Context()
-	m := seed(t, db)
-
-	const writers = 8
-	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		seqs []int64
-	)
-	for i := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			tx, err := db.Pool().Begin(ctx)
-			if err != nil {
-				t.Errorf("begin: %v", err)
-				return
-			}
-			defer func() { _ = tx.Rollback(ctx) }()
-
-			seq, err := appendEvent(ctx, tx, m.id, "judge.finished")
-			if err != nil {
-				t.Errorf("writer %d: %v", i, err)
-				return
-			}
-			if err := tx.Commit(ctx); err != nil {
-				t.Errorf("writer %d commit: %v", i, err)
-				return
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			seqs = append(seqs, seq)
-		}()
-	}
-	wg.Wait()
-
-	if len(seqs) != writers {
-		t.Fatalf("%d writers appended, want %d", len(seqs), writers)
-	}
-
-	seen := make(map[int64]bool, len(seqs))
-	for _, seq := range seqs {
-		if seq < 1 || seq > writers {
-			t.Errorf("seq %d is outside 1..%d", seq, writers)
-		}
-		if seen[seq] {
-			t.Errorf("seq %d was handed out twice", seq)
-		}
-		seen[seq] = true
 	}
 }
 
