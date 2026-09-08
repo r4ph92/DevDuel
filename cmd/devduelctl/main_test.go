@@ -115,6 +115,8 @@ func TestRunRejectsCommandsItDoesNotHave(t *testing.T) {
 		{"nonsense"},
 		{"challenge", "verify"},
 		{"challenge", "verify", "one", "two"},
+		{"database", "migrate"},
+		{"db", "reset"},
 	}
 
 	for _, args := range cases {
@@ -128,5 +130,27 @@ func TestRunRejectsCommandsItDoesNotHave(t *testing.T) {
 				t.Errorf("usage should be printed to stderr, got:\n%s", errOut.String())
 			}
 		})
+	}
+}
+
+func TestMigrateNeedsADatabase(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"db", "migrate"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("db migrate succeeded without a database, want an error")
+	}
+	if !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("error = %q, want it to name DATABASE_URL", err)
+	}
+}
+
+func TestMigrateTakesNoArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	err := run(t.Context(), []string{"db", "migrate", "somewhere"}, &out, &errOut)
+	if err == nil {
+		t.Fatal("db migrate succeeded with an argument, want an error")
 	}
 }
