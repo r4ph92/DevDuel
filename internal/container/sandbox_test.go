@@ -82,6 +82,8 @@ func judgeSandbox() container.Sandbox {
 		DropCapabilities: []string{"ALL"},
 		NoNewPrivileges:  true,
 		User:             "65534:65534",
+		MaxLogSizeMB:     16,
+		MaxLogFiles:      2,
 	}
 }
 
@@ -178,6 +180,48 @@ func TestSandboxCapsAFloodOfOutputWithoutGrowingTheHeap(t *testing.T) {
 	const tolerance = 64 << 20
 	if growth := int64(after.HeapAlloc) - int64(before.HeapAlloc); growth > tolerance {
 		t.Errorf("heap grew by %d bytes reading capped logs, want under %d", growth, tolerance)
+	}
+}
+
+func TestSandboxBoundsWhatTheDaemonWritesToTheHost(t *testing.T) {
+	// The read cap bounds the judge's memory and nothing else: docker keeps
+	// every byte a container prints, on the host's disk, until the container
+	// is removed. Measured before this bound existed, 200MB of stdout became
+	// 200,842,352 bytes under /var/lib/docker.
+	cli := requireDocker(t)
+
+	const (
+		written = 100 << 20
+		capMB   = 1
+	)
+	box := judgeSandbox()
+	box.MaxLogSizeMB = capMB
+	box.MaxLogFiles = 1
+
+	name := sandboxed(t, cli, box,
+		`yes 0123456789012345678901234567890123456789012345678901234567890123 | head -c 104857600`)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	if err := cli.StartContainer(ctx, name); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := cli.WaitContainer(ctx, name); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	logs, err := cli.Logs(ctx, name)
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+
+	// Everything docker still had: what we kept, plus what we dropped while
+	// reading. Rotation means that is a small multiple of the cap rather than
+	// everything the container printed.
+	received := len(logs.Stdout) + len(logs.Stderr) + logs.Elided
+	if limit := 8 * capMB << 20; received > limit {
+		t.Errorf("docker still held %d bytes of a %d byte flood, want under %d: rotation is not bounding the host",
+			received, written, limit)
 	}
 }
 

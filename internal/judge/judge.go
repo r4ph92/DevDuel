@@ -69,6 +69,15 @@ const (
 	ScratchDir = "/tmp"
 	// scratchOptions bound that tmpfs and stop it being used to run code.
 	scratchOptions = "rw,noexec,nosuid,size=64m"
+
+	// maxLogSizeMB and maxLogFiles bound what the daemon writes to the host's
+	// disk for one container. The judge only ever reads a few hundred
+	// kilobytes back, so this is generous on purpose: it has to be large
+	// enough that rotation never eats output anyone would have looked at,
+	// and small enough that a container printing without end costs tens of
+	// megabytes rather than all of them.
+	maxLogSizeMB = 16
+	maxLogFiles  = 2
 )
 
 // sandboxFor is the confinement for one job's containers.
@@ -82,6 +91,8 @@ func sandboxFor(limits challenge.Limits) container.Sandbox {
 		DropCapabilities: []string{"ALL"},
 		NoNewPrivileges:  true,
 		User:             SandboxUser,
+		MaxLogSizeMB:     maxLogSizeMB,
+		MaxLogFiles:      maxLogFiles,
 	}
 }
 
@@ -106,8 +117,8 @@ type Job struct {
 	ID string
 	// Spec is the challenge being judged.
 	Spec *challenge.Spec
-	// Workspace is a local directory whose contents are copied into the
-	// runner. It holds the player's files and nothing else.
+	// Workspace is a local directory bind-mounted into the runner. It holds
+	// the player's files and nothing else.
 	Workspace string
 }
 

@@ -496,6 +496,8 @@ func TestCreateContainerRendersTheSandbox(t *testing.T) {
 			DropCapabilities: []string{"ALL"},
 			NoNewPrivileges:  true,
 			User:             "65534:65534",
+			MaxLogSizeMB:     16,
+			MaxLogFiles:      2,
 		},
 	})
 	if err != nil {
@@ -516,6 +518,31 @@ func TestCreateContainerRendersTheSandbox(t *testing.T) {
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 		"--user", "65534:65534",
+		"--log-driver", "json-file",
+		"--log-opt", "max-size=16m",
+		"--log-opt", "max-file=2",
+		"alpine:3",
+	})
+}
+
+func TestCreateContainerAlwaysKeepsAtLeastOneLogFile(t *testing.T) {
+	// max-file=0 is not a thing docker accepts, and a caller who asked for a
+	// size but forgot the count meant "bound it", not "disable logging".
+	cli, fake := newCLI(t, "echo id")
+
+	_, err := cli.CreateContainer(t.Context(), container.Spec{
+		Image:   "alpine:3",
+		Sandbox: container.Sandbox{MaxLogSizeMB: 8},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	wantArgs(t, fake.onlyCall(t), []string{
+		"create",
+		"--log-driver", "json-file",
+		"--log-opt", "max-size=8m",
+		"--log-opt", "max-file=1",
 		"alpine:3",
 	})
 }
