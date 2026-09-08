@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/r4ph92/DevDuel/internal/store"
 )
@@ -49,21 +48,21 @@ const templateLock int64 = 0x64657664_74706c74 // "devdtplt"
 // the server is not there at all.
 const setupTimeout = 30 * time.Second
 
-// New returns a pool for a migrated database of this test's own, dropped when
-// the test ends.
-func New(t *testing.T) *pgxpool.Pool {
+// New returns a migrated database of this test's own, dropped when the test
+// ends.
+func New(t *testing.T) *store.Store {
 	t.Helper()
 	return database(t, templateDB)
 }
 
-// Empty returns a pool for a database with no schema at all, for tests of
-// migration itself.
-func Empty(t *testing.T) *pgxpool.Pool {
+// Empty returns a database with no schema at all, for tests of migration
+// itself.
+func Empty(t *testing.T) *store.Store {
 	t.Helper()
 	return database(t, "")
 }
 
-func database(t *testing.T, template string) *pgxpool.Pool {
+func database(t *testing.T, template string) *store.Store {
 	t.Helper()
 
 	url := requireURL(t)
@@ -94,7 +93,7 @@ func database(t *testing.T, template string) *pgxpool.Pool {
 	}
 	unlock()
 
-	pool, err := store.Open(t.Context(), target)
+	db, err := store.Open(t.Context(), target)
 	if err != nil {
 		t.Fatalf("open %s: %v", name, err)
 	}
@@ -102,7 +101,7 @@ func database(t *testing.T, template string) *pgxpool.Pool {
 	t.Cleanup(func() {
 		// Close first: Postgres will not drop a database with a live
 		// connection, and force would only paper over a leaked pool.
-		pool.Close()
+		db.Close()
 
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), setupTimeout)
 		defer cancel()
@@ -115,7 +114,7 @@ func database(t *testing.T, template string) *pgxpool.Pool {
 		}
 	})
 
-	return pool
+	return db
 }
 
 // templateOnce keeps one test binary from building the template repeatedly,
@@ -196,13 +195,13 @@ func migrateTemplate(ctx context.Context, admin *pgx.Conn, url string) error {
 	if err != nil {
 		return err
 	}
-	pool, err := store.Open(ctx, target)
+	db, err := store.Open(ctx, target)
 	if err != nil {
 		return fmt.Errorf("open template: %w", err)
 	}
-	defer pool.Close()
+	defer db.Close()
 
-	if _, err := store.Migrate(ctx, pool); err != nil {
+	if _, err := db.Migrate(ctx); err != nil {
 		return fmt.Errorf("migrate template: %w", err)
 	}
 	return nil

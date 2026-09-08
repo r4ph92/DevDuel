@@ -111,7 +111,7 @@ func runMigrate(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	}
 	defer db.Close()
 
-	applied, err := store.Migrate(ctx, db)
+	applied, err := db.Migrate(ctx)
 	if err != nil {
 		return err
 	}

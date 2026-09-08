@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/r4ph92/DevDuel/internal/store"
 
 	"github.com/r4ph92/DevDuel/internal/id"
 	"github.com/r4ph92/DevDuel/internal/store/storetest"
@@ -27,7 +27,7 @@ type match struct {
 	version   int
 }
 
-func seed(t *testing.T, db *pgxpool.Pool) match {
+func seed(t *testing.T, db *store.Store) match {
 	t.Helper()
 	ctx := t.Context()
 
@@ -36,20 +36,20 @@ func seed(t *testing.T, db *pgxpool.Pool) match {
 	const insertChallenge = `insert into challenges
 		(id, version, category, difficulty, duration, image_tag)
 		values ($1, $2, 'debugging', 'medium', '45 minutes', 'devduel/todo-api:1')`
-	if _, err := db.Exec(ctx, insertChallenge, m.challenge, m.version); err != nil {
+	if _, err := db.Pool().Exec(ctx, insertChallenge, m.challenge, m.version); err != nil {
 		t.Fatalf("insert challenge: %v", err)
 	}
 
 	const insertRequirement = `insert into requirements
 		(challenge_id, challenge_version, key, position, title, description, weight, broken)
 		values ($1, $2, 'health', 0, 'GET /health answers', 'it answers', 1, false)`
-	if _, err := db.Exec(ctx, insertRequirement, m.challenge, m.version); err != nil {
+	if _, err := db.Pool().Exec(ctx, insertRequirement, m.challenge, m.version); err != nil {
 		t.Fatalf("insert requirement: %v", err)
 	}
 
 	const insertMatch = `insert into matches (id, challenge_id, challenge_version, lobby_code)
 		values ($1, $2, $3, $4)`
-	if _, err := db.Exec(ctx, insertMatch, m.id, m.challenge, m.version, "LOBBY1"); err != nil {
+	if _, err := db.Pool().Exec(ctx, insertMatch, m.id, m.challenge, m.version, "LOBBY1"); err != nil {
 		t.Fatalf("insert match: %v", err)
 	}
 
@@ -57,14 +57,14 @@ func seed(t *testing.T, db *pgxpool.Pool) match {
 		m.players[i] = seedUser(t, db)
 
 		const join = `insert into match_players (match_id, user_id, slot) values ($1, $2, $3)`
-		if _, err := db.Exec(ctx, join, m.id, m.players[i], i+1); err != nil {
+		if _, err := db.Pool().Exec(ctx, join, m.id, m.players[i], i+1); err != nil {
 			t.Fatalf("insert match player: %v", err)
 		}
 	}
 	return m
 }
 
-func seedUser(t *testing.T, db *pgxpool.Pool) id.ID {
+func seedUser(t *testing.T, db *store.Store) id.ID {
 	t.Helper()
 
 	user := id.New()
@@ -73,7 +73,7 @@ func seedUser(t *testing.T, db *pgxpool.Pool) id.ID {
 	// The tail of the id, because a username is capped at 32 characters and
 	// the head of a version 7 uuid is the same for every id minted this hour.
 	name := "player-" + user.String()[24:]
-	if _, err := db.Exec(t.Context(), insert, user, name+"@example.test", name); err != nil {
+	if _, err := db.Pool().Exec(t.Context(), insert, user, name+"@example.test", name); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	return user
@@ -103,7 +103,7 @@ func TestMatchEventsCannotBeEditedOrRemoved(t *testing.T) {
 	ctx := t.Context()
 	m := seed(t, db)
 
-	tx, err := db.Begin(ctx)
+	tx, err := db.Pool().Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
@@ -119,14 +119,14 @@ func TestMatchEventsCannotBeEditedOrRemoved(t *testing.T) {
 		"delete": `delete from match_events where match_id = $1`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.Exec(ctx, stmt, m.id); err == nil {
+			if _, err := db.Pool().Exec(ctx, stmt, m.id); err == nil {
 				t.Errorf("%s on match_events succeeded, want a refusal", name)
 			}
 		})
 	}
 
 	// And deleting the match cannot be used to get around the trigger.
-	if _, err := db.Exec(ctx, `delete from matches where id = $1`, m.id); err == nil {
+	if _, err := db.Pool().Exec(ctx, `delete from matches where id = $1`, m.id); err == nil {
 		t.Error("deleting a match with events succeeded, want a refusal")
 	}
 }
@@ -151,7 +151,7 @@ func TestMatchEventSequenceIsGaplessUnderConcurrency(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			tx, err := db.Begin(ctx)
+			tx, err := db.Pool().Begin(ctx)
 			if err != nil {
 				t.Errorf("begin: %v", err)
 				return
@@ -200,26 +200,26 @@ func TestOnlyOneJudgeJobPerPlayerIsInFlight(t *testing.T) {
 	m := seed(t, db)
 
 	const queue = `insert into judge_jobs (id, match_id, user_id) values ($1, $2, $3)`
-	if _, err := db.Exec(ctx, queue, id.New(), m.id, m.players[0]); err != nil {
+	if _, err := db.Pool().Exec(ctx, queue, id.New(), m.id, m.players[0]); err != nil {
 		t.Fatalf("queue first job: %v", err)
 	}
 
-	if _, err := db.Exec(ctx, queue, id.New(), m.id, m.players[0]); err == nil {
+	if _, err := db.Pool().Exec(ctx, queue, id.New(), m.id, m.players[0]); err == nil {
 		t.Error("queued a second job while one was in flight, want a refusal")
 	}
 
 	// The other player is unaffected.
-	if _, err := db.Exec(ctx, queue, id.New(), m.id, m.players[1]); err != nil {
+	if _, err := db.Pool().Exec(ctx, queue, id.New(), m.id, m.players[1]); err != nil {
 		t.Errorf("queue the other player's job: %v", err)
 	}
 
 	// Once the first job is out of flight, that player can run again.
 	const finish = `update judge_jobs set state = 'succeeded', started_at = now(), finished_at = now()
 		where match_id = $1 and user_id = $2`
-	if _, err := db.Exec(ctx, finish, m.id, m.players[0]); err != nil {
+	if _, err := db.Pool().Exec(ctx, finish, m.id, m.players[0]); err != nil {
 		t.Fatalf("finish first job: %v", err)
 	}
-	if _, err := db.Exec(ctx, queue, id.New(), m.id, m.players[0]); err != nil {
+	if _, err := db.Pool().Exec(ctx, queue, id.New(), m.id, m.players[0]); err != nil {
 		t.Errorf("queue a job after the previous one finished: %v", err)
 	}
 }
@@ -242,7 +242,7 @@ func TestStartingAMatchIsIdempotent(t *testing.T) {
 		  and c.id = m.challenge_id and c.version = m.challenge_version
 		  and m.state = 'lobby'`
 
-	first, err := db.Exec(ctx, start, m.id)
+	first, err := db.Pool().Exec(ctx, start, m.id)
 	if err != nil {
 		t.Fatalf("start match: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestStartingAMatchIsIdempotent(t *testing.T) {
 		t.Fatalf("first start affected %d rows, want 1", first.RowsAffected())
 	}
 
-	second, err := db.Exec(ctx, start, m.id)
+	second, err := db.Pool().Exec(ctx, start, m.id)
 	if err != nil {
 		t.Fatalf("start match again: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestStartingAMatchIsIdempotent(t *testing.T) {
 
 	var minutes float64
 	const clock = `select extract(epoch from (deadline_at - started_at)) / 60 from matches where id = $1`
-	if err := db.QueryRow(ctx, clock, m.id).Scan(&minutes); err != nil {
+	if err := db.Pool().QueryRow(ctx, clock, m.id).Scan(&minutes); err != nil {
 		t.Fatalf("read the clock: %v", err)
 	}
 	if minutes != 45 {
@@ -279,14 +279,14 @@ func TestChallengeVersionsAreImmutable(t *testing.T) {
 		"its requirement": `update requirements set weight = 99 where challenge_id = $1`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.Exec(ctx, stmt, m.challenge); err == nil {
+			if _, err := db.Pool().Exec(ctx, stmt, m.challenge); err == nil {
 				t.Errorf("editing %s succeeded, want a refusal", name)
 			}
 		})
 	}
 
 	// A played version cannot be deleted either, so history stays explicable.
-	if _, err := db.Exec(ctx, `delete from challenges where id = $1`, m.challenge); err == nil {
+	if _, err := db.Pool().Exec(ctx, `delete from challenges where id = $1`, m.challenge); err == nil {
 		t.Error("deleting a played challenge succeeded, want a refusal")
 	}
 }
@@ -299,10 +299,10 @@ func TestTheWinnerMustHavePlayedTheMatch(t *testing.T) {
 	stranger := seedUser(t, db)
 
 	const declare = `update matches set winner_user_id = $2 where id = $1`
-	if _, err := db.Exec(ctx, declare, m.id, stranger); err == nil {
+	if _, err := db.Pool().Exec(ctx, declare, m.id, stranger); err == nil {
 		t.Error("recorded a winner who was not in the match, want a refusal")
 	}
-	if _, err := db.Exec(ctx, declare, m.id, m.players[1]); err != nil {
+	if _, err := db.Pool().Exec(ctx, declare, m.id, m.players[1]); err != nil {
 		t.Fatalf("record a player as the winner: %v", err)
 	}
 
@@ -310,7 +310,7 @@ func TestTheWinnerMustHavePlayedTheMatch(t *testing.T) {
 	// as uuid rather than as text.
 	var winner id.ID
 	const read = `select winner_user_id from matches where id = $1`
-	if err := db.QueryRow(ctx, read, m.id).Scan(&winner); err != nil {
+	if err := db.Pool().QueryRow(ctx, read, m.id).Scan(&winner); err != nil {
 		t.Fatalf("read the winner: %v", err)
 	}
 	if winner != m.players[1] {
@@ -328,7 +328,7 @@ func TestAnUnstartedLobbyCanBeAbandoned(t *testing.T) {
 
 	const abandon = `update matches set state = 'abandoned', ended_at = now()
 		where id = $1 and state = 'lobby'`
-	res, err := db.Exec(ctx, abandon, m.id)
+	res, err := db.Pool().Exec(ctx, abandon, m.id)
 	if err != nil {
 		t.Fatalf("abandon lobby: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestWorkspacePathsCannotEscapeTheWorkspace(t *testing.T) {
 	const write = `insert into workspace_files (match_id, user_id, path, content)
 		values ($1, $2, $3, $4)`
 
-	if _, err := db.Exec(ctx, write, m.id, m.players[0], "src/server.js", []byte("ok")); err != nil {
+	if _, err := db.Pool().Exec(ctx, write, m.id, m.players[0], "src/server.js", []byte("ok")); err != nil {
 		t.Fatalf("write a normal file: %v", err)
 	}
 
@@ -361,7 +361,7 @@ func TestWorkspacePathsCannotEscapeTheWorkspace(t *testing.T) {
 		"too long":       strings.Repeat("a", 513),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := db.Exec(ctx, write, m.id, m.players[0], path, []byte("x")); err == nil {
+			if _, err := db.Pool().Exec(ctx, write, m.id, m.players[0], path, []byte("x")); err == nil {
 				t.Errorf("wrote %q, want a refusal", path)
 			}
 		})
@@ -378,18 +378,18 @@ func TestAWorkspaceGoesWithItsPlayer(t *testing.T) {
 
 	const write = `insert into workspace_files (match_id, user_id, path, content)
 		values ($1, $2, 'server.js', 'x')`
-	if _, err := db.Exec(ctx, write, m.id, m.players[0]); err != nil {
+	if _, err := db.Pool().Exec(ctx, write, m.id, m.players[0]); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 
 	const leave = `delete from match_players where match_id = $1 and user_id = $2`
-	if _, err := db.Exec(ctx, leave, m.id, m.players[0]); err != nil {
+	if _, err := db.Pool().Exec(ctx, leave, m.id, m.players[0]); err != nil {
 		t.Fatalf("remove player: %v", err)
 	}
 
 	var left int
 	const count = `select count(*) from workspace_files where match_id = $1 and user_id = $2`
-	if err := db.QueryRow(ctx, count, m.id, m.players[0]).Scan(&left); err != nil {
+	if err := db.Pool().QueryRow(ctx, count, m.id, m.players[0]).Scan(&left); err != nil {
 		t.Fatalf("count files: %v", err)
 	}
 	if left != 0 {

@@ -14,7 +14,7 @@ func TestMigrateAppliesTheSchemaAndStopsThere(t *testing.T) {
 	db := storetest.Empty(t)
 	ctx := t.Context()
 
-	applied, err := store.Migrate(ctx, db)
+	applied, err := db.Migrate(ctx)
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -27,13 +27,13 @@ func TestMigrateAppliesTheSchemaAndStopsThere(t *testing.T) {
 
 	// The schema is really there, not just recorded.
 	var users int
-	if err := db.QueryRow(ctx, "select count(*) from users").Scan(&users); err != nil {
+	if err := db.Pool().QueryRow(ctx, "select count(*) from users").Scan(&users); err != nil {
 		t.Fatalf("select from users: %v", err)
 	}
 
 	// Every process calls Migrate at startup, so a second run has to be a
 	// no-op rather than an error.
-	again, err := store.Migrate(ctx, db)
+	again, err := db.Migrate(ctx)
 	if err != nil {
 		t.Fatalf("second Migrate: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestMigrateIsSafeToRunConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			applied, err := store.Migrate(ctx, db)
+			applied, err := db.Migrate(ctx)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -78,7 +78,7 @@ func TestMigrateIsSafeToRunConcurrently(t *testing.T) {
 	}
 
 	var recorded int
-	if err := db.QueryRow(ctx, "select count(*) from schema_migrations").Scan(&recorded); err != nil {
+	if err := db.Pool().QueryRow(ctx, "select count(*) from schema_migrations").Scan(&recorded); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
 	if recorded == 0 {
@@ -95,17 +95,17 @@ func TestMigrateRefusesAnAppliedMigrationThatChanged(t *testing.T) {
 	db := storetest.Empty(t)
 	ctx := t.Context()
 
-	if _, err := store.Migrate(ctx, db); err != nil {
+	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 
 	// What editing a committed migration looks like from the database's side.
 	const tamper = "update schema_migrations set checksum = 'not-what-ran' where version = 1"
-	if _, err := db.Exec(ctx, tamper); err != nil {
+	if _, err := db.Pool().Exec(ctx, tamper); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
 
-	_, err := store.Migrate(ctx, db)
+	_, err := db.Migrate(ctx)
 	if !errors.Is(err, store.ErrChecksumMismatch) {
 		t.Fatalf("Migrate = %v, want ErrChecksumMismatch", err)
 	}
@@ -116,7 +116,7 @@ func TestMigrateRefusesADatabaseFromTheFuture(t *testing.T) {
 	db := storetest.Empty(t)
 	ctx := t.Context()
 
-	if _, err := store.Migrate(ctx, db); err != nil {
+	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 
@@ -124,11 +124,11 @@ func TestMigrateRefusesADatabaseFromTheFuture(t *testing.T) {
 	// one. Migrations only go forward, so this binary must not touch it.
 	const ahead = `insert into schema_migrations (version, name, checksum)
 	                values (9999, 'from_the_future', 'unknown')`
-	if _, err := db.Exec(ctx, ahead); err != nil {
+	if _, err := db.Pool().Exec(ctx, ahead); err != nil {
 		t.Fatalf("insert future migration: %v", err)
 	}
 
-	_, err := store.Migrate(ctx, db)
+	_, err := db.Migrate(ctx)
 	if !errors.Is(err, store.ErrUnknownMigration) {
 		t.Fatalf("Migrate = %v, want ErrUnknownMigration", err)
 	}

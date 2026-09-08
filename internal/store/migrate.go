@@ -14,7 +14,6 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Migrations are forward only. There are no down migrations because there is
@@ -54,7 +53,7 @@ type migration struct {
 // returns the migrations it had to run. Running it against an up to date
 // database applies nothing and is not an error, so running it twice, or from
 // two places at the same moment, is safe.
-func Migrate(ctx context.Context, db *pgxpool.Pool) ([]Applied, error) {
+func (s *Store) Migrate(ctx context.Context) ([]Applied, error) {
 	files, err := loadMigrations(migrationFS)
 	if err != nil {
 		return nil, err
@@ -63,7 +62,7 @@ func Migrate(ctx context.Context, db *pgxpool.Pool) ([]Applied, error) {
 	// One connection for the whole run: an advisory lock is held by a
 	// session, so taking it on a pooled connection and applying migrations on
 	// another would leave the work unprotected.
-	conn, err := db.Acquire(ctx)
+	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("store: acquire connection: %w", err)
 	}
