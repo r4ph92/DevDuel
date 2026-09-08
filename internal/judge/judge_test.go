@@ -103,7 +103,7 @@ func TestRunCreatesAndRemovesAPerJobInternalNetwork(t *testing.T) {
 		// could install its way out of a reproducible run.
 		t.Error("the judge network must be internal")
 	}
-	if !fake.happened("network.remove " + names.network) {
+	if fake.alive(names.network) {
 		t.Errorf("the network was not removed:\n%s", fake.eventLog())
 	}
 }
@@ -224,7 +224,7 @@ func assertNothingLeftBehind(t *testing.T, fake *fakeRuntime) {
 	t.Helper()
 
 	for _, name := range []string{names.runner, names.tester, names.network} {
-		if !fake.isGone(name) {
+		if fake.alive(name) {
 			t.Errorf("%s survived the job:\n%s", name, fake.eventLog())
 		}
 	}
@@ -270,6 +270,45 @@ func TestRunRemovesEverythingWhenTheCallerGivesUp(t *testing.T) {
 	_, _ = j.Run(ctx, job)
 
 	assertNothingLeftBehind(t, fake)
+}
+
+func TestRunLeavesAnotherRunsResourcesAlone(t *testing.T) {
+	// A job id that is already in use belongs to a run that is still going.
+	// Creating its network fails, and teardown must not then remove the
+	// containers that run is using.
+	j, fake, job := newJob(t, "list-todos=pass", "create-todo=pass")
+	fake.existing(names.network, names.runner, names.tester)
+	fake.failOn = "network.create " + names.network
+
+	if _, err := j.Run(t.Context(), job); err == nil {
+		t.Fatal("Run: expected a job whose network already exists to fail")
+	}
+
+	for _, name := range []string{names.network, names.runner, names.tester} {
+		if !fake.alive(name) {
+			t.Errorf("%s belongs to a live run and must survive:\n%s", name, fake.eventLog())
+		}
+	}
+}
+
+func TestRunRemovesOnlyWhatItCreated(t *testing.T) {
+	// The network is this run's, so it goes. The containers were never
+	// created, so there is nothing to remove and nothing to report.
+	j, fake, job := newJob(t, "list-todos=pass", "create-todo=pass")
+	fake.failOn = "create " + names.runner
+
+	if _, err := j.Run(t.Context(), job); err == nil {
+		t.Fatal("Run: expected a failed runner create to fail the job")
+	}
+
+	if fake.alive(names.network) {
+		t.Errorf("the network this run created should be gone:\n%s", fake.eventLog())
+	}
+	for _, event := range []string{"remove " + names.runner, "remove " + names.tester} {
+		if fake.happened(event) {
+			t.Errorf("%q was never created, so it must not be removed:\n%s", event, fake.eventLog())
+		}
+	}
 }
 
 func TestRunReportsWhatItCouldNotRemove(t *testing.T) {

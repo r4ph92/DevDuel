@@ -31,10 +31,11 @@ type fakeRuntime struct {
 	networks map[string]container.NetworkSpec
 	// copies records src -> name:dst for every CopyTo.
 	copies []string
-	// gone is what was actually removed. A removal that was attempted and
-	// failed does not count: the invariant is that nothing survives the job,
-	// not that the judge tried.
-	gone map[string]bool
+	// live is what currently exists. Created objects go in, successfully
+	// removed ones come out. A removal that was attempted and refused leaves
+	// the object alive, which is the whole point: the invariant is that
+	// nothing the job created survives it, not that the judge tried.
+	live map[string]bool
 
 	// logs is what each container "printed", by name.
 	logs map[string]container.Logs
@@ -61,7 +62,7 @@ func newFakeRuntime() *fakeRuntime {
 		containers: map[string]container.Spec{},
 		networks:   map[string]container.NetworkSpec{},
 		logs:       map[string]container.Logs{},
-		gone:       map[string]bool{},
+		live:       map[string]bool{},
 	}
 }
 
@@ -113,6 +114,7 @@ func (f *fakeRuntime) CreateNetwork(ctx context.Context, spec container.NetworkS
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.networks[spec.Name] = spec
+	f.live[spec.Name] = true
 	return nil
 }
 
@@ -131,6 +133,7 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec container.Spec) 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.containers[spec.Name] = spec
+	f.live[spec.Name] = true
 	return spec.Name, nil
 }
 
@@ -182,7 +185,7 @@ func (f *fakeRuntime) RemoveContainer(ctx context.Context, name string) error {
 	return f.markGone(name)
 }
 
-// markGone records a successful removal, or reports why it failed.
+// markGone removes an object, or reports why it could not be.
 func (f *fakeRuntime) markGone(name string) error {
 	if f.removeErr != nil {
 		return f.removeErr
@@ -190,16 +193,26 @@ func (f *fakeRuntime) markGone(name string) error {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.gone[name] = true
+	delete(f.live, name)
 	return nil
 }
 
-// isGone reports whether the named object was actually removed.
-func (f *fakeRuntime) isGone(name string) bool {
+// alive reports whether the named object still exists.
+func (f *fakeRuntime) alive(name string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.gone[name]
+	return f.live[name]
+}
+
+// existing stands in for objects another run already owns.
+func (f *fakeRuntime) existing(names ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, name := range names {
+		f.live[name] = true
+	}
 }
 
 var _ container.Runtime = (*fakeRuntime)(nil)

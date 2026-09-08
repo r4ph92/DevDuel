@@ -111,11 +111,14 @@ func (j *Judge) Run(ctx context.Context, job Job) (report Report, err error) {
 	names := namesFor(job.ID)
 	started := time.Now()
 
-	// Registered before anything exists, so it runs however the job ends —
-	// including a failure to create the very first thing. Removal is
-	// idempotent, so tearing down what was never built is free.
+	// Registered before anything exists, so it runs however the job ends,
+	// including a failure to create the very first thing. It removes only
+	// what this call actually created: a job id that is somehow already in
+	// use belongs to a run that is still going, and tearing its containers
+	// down would kill it.
+	var created owned
 	defer func() {
-		if teardownErr := j.teardown(ctx, names); teardownErr != nil {
+		if teardownErr := j.teardown(ctx, names, created); teardownErr != nil {
 			err = errors.Join(err, teardownErr)
 		}
 	}()
@@ -129,16 +132,17 @@ func (j *Judge) Run(ctx context.Context, job Job) (report Report, err error) {
 	}); err != nil {
 		return Report{}, fmt.Errorf("create judge network: %w", err)
 	}
+	created.network = true
 
 	// The runner holds the player's code. It answers to one alias on one
 	// network and publishes nothing.
-	if err := j.startRunner(ctx, job, names); err != nil {
+	if err := j.startRunner(ctx, job, names, &created); err != nil {
 		return Report{}, err
 	}
 
 	// The tester holds the hidden tests. It reaches the runner by alias and
 	// waits for the health endpoint itself, so the host never has to.
-	if err := j.startTester(ctx, job, names); err != nil {
+	if err := j.startTester(ctx, job, names, &created); err != nil {
 		return Report{}, err
 	}
 
@@ -178,7 +182,7 @@ func (j *Judge) Run(ctx context.Context, job Job) (report Report, err error) {
 	}, nil
 }
 
-func (j *Judge) startRunner(ctx context.Context, job Job, names names) error {
+func (j *Judge) startRunner(ctx context.Context, job Job, names names, created *owned) error {
 	spec := job.Spec
 
 	if _, err := j.runtime.CreateContainer(ctx, container.Spec{
@@ -193,6 +197,7 @@ func (j *Judge) startRunner(ctx context.Context, job Job, names names) error {
 	}); err != nil {
 		return fmt.Errorf("create runner: %w", err)
 	}
+	created.runner = true
 
 	// The player's workspace, and only that. The hidden tests never touch
 	// this container.
@@ -205,7 +210,7 @@ func (j *Judge) startRunner(ctx context.Context, job Job, names names) error {
 	return nil
 }
 
-func (j *Judge) startTester(ctx context.Context, job Job, names names) error {
+func (j *Judge) startTester(ctx context.Context, job Job, names names, created *owned) error {
 	spec := job.Spec
 	target := fmt.Sprintf("http://%s:%d", RunnerAlias, spec.App.Port)
 
@@ -223,6 +228,7 @@ func (j *Judge) startTester(ctx context.Context, job Job, names names) error {
 	}); err != nil {
 		return fmt.Errorf("create tester: %w", err)
 	}
+	created.tester = true
 
 	if err := j.runtime.CopyTo(ctx, names.tester, contentsOf(spec.TestsDir()), TestsDir); err != nil {
 		return fmt.Errorf("copy hidden tests into tester: %w", err)
@@ -233,12 +239,23 @@ func (j *Judge) startTester(ctx context.Context, job Job, names names) error {
 	return nil
 }
 
-// teardown removes everything the job created.
+// owned marks what one Run actually brought into existence.
+//
+// Removal by name alone would be wrong: a create that failed because the name
+// was taken means the object belongs to somebody else, and removing it would
+// end a run that is still going.
+type owned struct {
+	network bool
+	runner  bool
+	tester  bool
+}
+
+// teardown removes what this run created, and only that.
 //
 // It runs on a context detached from the job's, because the usual reason to
-// be tearing down is that the job's context is already dead — and a cancelled
+// be tearing down is that the job's context is already dead, and a cancelled
 // job that leaves containers running is worse than a slow one.
-func (j *Judge) teardown(ctx context.Context, names names) error {
+func (j *Judge) teardown(ctx context.Context, names names, created owned) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
 	defer cancel()
 
@@ -246,13 +263,19 @@ func (j *Judge) teardown(ctx context.Context, names names) error {
 
 	// Containers before the network: a network with attached endpoints
 	// cannot be removed.
+	containers := map[string]bool{names.runner: created.runner, names.tester: created.tester}
 	for _, name := range []string{names.runner, names.tester} {
+		if !containers[name] {
+			continue
+		}
 		if err := j.runtime.RemoveContainer(ctx, name); err != nil {
 			errs = append(errs, fmt.Errorf("remove container %s: %w", name, err))
 		}
 	}
-	if err := j.runtime.RemoveNetwork(ctx, names.network); err != nil {
-		errs = append(errs, fmt.Errorf("remove network %s: %w", names.network, err))
+	if created.network {
+		if err := j.runtime.RemoveNetwork(ctx, names.network); err != nil {
+			errs = append(errs, fmt.Errorf("remove network %s: %w", names.network, err))
+		}
 	}
 
 	if len(errs) == 0 {
