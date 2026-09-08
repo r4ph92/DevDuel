@@ -1,0 +1,120 @@
+id: todo-api
+version: 1
+category: debugging
+difficulty: medium
+duration: 45m
+
+image:
+  tag: devduel/todo-api:1
+
+app:
+  command: ["node", "server.js"]
+  port: 3000
+  health_path: /health
+
+tester:
+  command: ["node", "/tests/run.js"]
+  timeout: 90s
+
+limits:
+  cpus: 1
+  memory_mb: 256
+  pids: 64
+
+requirements:
+  - key: health
+    title: GET /health reports that the service is up
+    description: >-
+      GET /health responds 200 with the JSON body {"status":"ok"}. The judge
+      waits for this before running anything else, so it has to answer as soon
+      as the server is listening.
+    weight: 1
+
+  - key: list-todos
+    title: GET /todos returns the todos that exist
+    description: >-
+      GET /todos responds 200 with a JSON array of todos. A todo that has just
+      been created appears in it.
+    weight: 1
+
+  - key: list-pagination
+    title: GET /todos slices the list with limit and offset
+    description: >-
+      GET /todos?limit=L&offset=N responds with the L todos starting at index
+      N, in the same order as the unpaginated list. Asking for two todos gives
+      two todos.
+    weight: 2
+    broken: true
+
+  - key: create-returns-201
+    title: POST /todos responds 201 Created
+    description: >-
+      Creating a todo is a creation, and answers with 201 rather than 200.
+    weight: 1
+    broken: true
+
+  - key: create-returns-todo
+    title: POST /todos returns the todo it created
+    description: >-
+      The response body is the new todo: a generated whole-number id, the
+      title that was sent, and completed set to false when the request did not
+      say otherwise.
+    weight: 1
+
+  - key: create-requires-title
+    title: POST /todos rejects a todo with no usable title
+    description: >-
+      A missing title, an empty title, a title of only whitespace, and a title
+      that is not a string are all refused with 400. A todo with no title is
+      not a todo.
+    weight: 2
+    broken: true
+
+  - key: create-rejects-non-boolean
+    title: POST /todos refuses a completed flag that is not a boolean
+    description: >-
+      completed is either true or false. Values such as "yes", 1 and null are
+      refused with 400 rather than being coerced into a boolean, because
+      guessing what the caller meant is how a todo silently becomes done.
+    weight: 2
+    broken: true
+
+  - key: get-todo
+    title: GET /todos/:id returns that todo
+    description: >-
+      GET /todos/:id responds 200 with the todo whose id was asked for.
+    weight: 1
+
+  - key: get-unknown-returns-404
+    title: GET /todos/:id answers 404 for a todo that is not there
+    description: >-
+      Asking for an id that does not exist responds 404. It does not respond
+      200 with an empty body, which tells the caller the todo exists and is
+      blank.
+    weight: 2
+    broken: true
+
+  - key: patch-merges-fields
+    title: PATCH /todos/:id changes only the fields it names
+    description: >-
+      PATCH is a partial update. Sending {"completed":true} marks the todo
+      done and leaves its title exactly as it was. Fields the request does not
+      mention are not touched.
+    weight: 3
+    broken: true
+
+  - key: patch-unknown-returns-404
+    title: PATCH /todos/:id answers 404 for a todo that is not there
+    description: >-
+      Patching an id that does not exist responds 404. It does not create the
+      todo: a partial update to something that is not there has nothing to
+      update.
+    weight: 2
+    broken: true
+
+  - key: delete-todo
+    title: DELETE /todos/:id removes the todo
+    description: >-
+      DELETE /todos/:id responds 204 with no body, and the todo no longer
+      appears in GET /todos.
+    weight: 1
