@@ -27,6 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -51,6 +52,38 @@ const (
 	// EnvHealthURL is the URL the tester polls until the app answers.
 	EnvHealthURL = "DEVDUEL_HEALTH_URL"
 )
+
+// The confinement every judge container runs under.
+//
+// The numbers come from the challenge, because how much a challenge needs is
+// the challenge author's call. Everything else is fixed: a challenge that
+// needs a capability, a writable root or a privileged user is a challenge
+// that should be rewritten, not a reason to loosen the sandbox.
+const (
+	// SandboxUser is the uid:gid judge containers run as. 65534 is "nobody"
+	// on every mainstream base image. Root inside the container is one
+	// kernel bug away from root on the host.
+	SandboxUser = "65534:65534"
+	// ScratchDir is the one writable path. It is a tmpfs, so it never
+	// touches the host's disk and disappears with the container.
+	ScratchDir = "/tmp"
+	// scratchOptions bound that tmpfs and stop it being used to run code.
+	scratchOptions = "rw,noexec,nosuid,size=64m"
+)
+
+// sandboxFor is the confinement for one job's containers.
+func sandboxFor(limits challenge.Limits) container.Sandbox {
+	return container.Sandbox{
+		CPUs:             limits.CPUs,
+		MemoryMB:         limits.MemoryMB,
+		PIDs:             limits.PIDs,
+		ReadOnlyRoot:     true,
+		Tmpfs:            map[string]string{ScratchDir: scratchOptions},
+		DropCapabilities: []string{"ALL"},
+		NoNewPrivileges:  true,
+		User:             SandboxUser,
+	}
+}
 
 // teardownTimeout bounds the removal of a job's containers and network.
 const teardownTimeout = 30 * time.Second
@@ -185,6 +218,11 @@ func (j *Judge) Run(ctx context.Context, job Job) (report Report, err error) {
 func (j *Judge) startRunner(ctx context.Context, job Job, names names, created *owned) error {
 	spec := job.Spec
 
+	workspace, err := filepath.Abs(job.Workspace)
+	if err != nil {
+		return fmt.Errorf("resolve workspace path: %w", err)
+	}
+
 	if _, err := j.runtime.CreateContainer(ctx, container.Spec{
 		Name:    names.runner,
 		Image:   spec.Image.Tag,
@@ -192,18 +230,23 @@ func (j *Judge) startRunner(ctx context.Context, job Job, names names, created *
 		Workdir: spec.App.Workdir,
 		Network: names.network,
 		Aliases: []string{RunnerAlias},
-		Env:     map[string]string{"PORT": strconv.Itoa(spec.App.Port)},
-		Labels:  names.labels,
+		Env: map[string]string{
+			"PORT": strconv.Itoa(spec.App.Port),
+			// Under a read-only root, a tool that writes to $HOME fails in a
+			// way that looks nothing like the real problem.
+			"HOME": ScratchDir,
+		},
+		Labels: names.labels,
+		// The player's workspace, and only that. The hidden tests never
+		// appear in this container. Read-only, so the app cannot rewrite its
+		// own source between the judge reading it and the tests running.
+		Mounts:  []container.Mount{{Source: workspace, Target: spec.App.Workdir, ReadOnly: true}},
+		Sandbox: sandboxFor(spec.Limits),
 	}); err != nil {
 		return fmt.Errorf("create runner: %w", err)
 	}
 	created.runner = true
 
-	// The player's workspace, and only that. The hidden tests never touch
-	// this container.
-	if err := j.runtime.CopyTo(ctx, names.runner, contentsOf(job.Workspace), spec.App.Workdir); err != nil {
-		return fmt.Errorf("copy workspace into runner: %w", err)
-	}
 	if err := j.runtime.StartContainer(ctx, names.runner); err != nil {
 		return fmt.Errorf("start runner: %w", err)
 	}
@@ -214,6 +257,13 @@ func (j *Judge) startTester(ctx context.Context, job Job, names names, created *
 	spec := job.Spec
 	target := fmt.Sprintf("http://%s:%d", RunnerAlias, spec.App.Port)
 
+	// A bind mount needs an absolute source, and the spec's directory is
+	// only as absolute as whoever loaded it made it.
+	tests, err := filepath.Abs(spec.TestsDir())
+	if err != nil {
+		return fmt.Errorf("resolve hidden tests path: %w", err)
+	}
+
 	if _, err := j.runtime.CreateContainer(ctx, container.Spec{
 		Name:    names.tester,
 		Image:   spec.Image.Tag,
@@ -223,16 +273,16 @@ func (j *Judge) startTester(ctx context.Context, job Job, names names, created *
 		Env: map[string]string{
 			EnvTarget:    target,
 			EnvHealthURL: target + spec.App.HealthPath,
+			"HOME":       ScratchDir,
 		},
-		Labels: names.labels,
+		Labels:  names.labels,
+		Mounts:  []container.Mount{{Source: tests, Target: TestsDir, ReadOnly: true}},
+		Sandbox: sandboxFor(spec.Limits),
 	}); err != nil {
 		return fmt.Errorf("create tester: %w", err)
 	}
 	created.tester = true
 
-	if err := j.runtime.CopyTo(ctx, names.tester, contentsOf(spec.TestsDir()), TestsDir); err != nil {
-		return fmt.Errorf("copy hidden tests into tester: %w", err)
-	}
 	if err := j.runtime.StartContainer(ctx, names.tester); err != nil {
 		return fmt.Errorf("start tester: %w", err)
 	}

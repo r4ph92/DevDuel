@@ -29,8 +29,6 @@ type fakeRuntime struct {
 	containers map[string]container.Spec
 	// networks is what each network was created with, by name.
 	networks map[string]container.NetworkSpec
-	// copies records src -> name:dst for every CopyTo.
-	copies []string
 	// live is what currently exists. Created objects go in, successfully
 	// removed ones come out. A removal that was attempted and refused leaves
 	// the object alive, which is the whole point: the invariant is that
@@ -135,17 +133,6 @@ func (f *fakeRuntime) CreateContainer(ctx context.Context, spec container.Spec) 
 	f.containers[spec.Name] = spec
 	f.live[spec.Name] = true
 	return spec.Name, nil
-}
-
-func (f *fakeRuntime) CopyTo(ctx context.Context, name, src, dst string) error {
-	if err := f.record(ctx, "cp "+name+" "+dst); err != nil {
-		return err
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.copies = append(f.copies, src+" -> "+name+":"+dst)
-	return nil
 }
 
 func (f *fakeRuntime) StartContainer(ctx context.Context, name string) error {

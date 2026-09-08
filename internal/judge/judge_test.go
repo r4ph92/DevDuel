@@ -3,6 +3,7 @@ package judge_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,33 +129,53 @@ func TestRunGivesTheRunnerThePlayerFilesAndNothingElse(t *testing.T) {
 	}
 
 	// The one thing that must never happen.
-	for _, copied := range fake.copies {
-		if strings.Contains(copied, names.runner) && strings.Contains(copied, job.Spec.TestsDir()) {
-			t.Errorf("hidden tests were copied into the runner: %s", copied)
+	tests, err := filepath.Abs(job.Spec.TestsDir())
+	if err != nil {
+		t.Fatalf("resolve tests dir: %v", err)
+	}
+	for _, m := range runner.Mounts {
+		if m.Source == tests {
+			t.Errorf("the hidden tests were mounted into the runner: %+v", m)
 		}
+	}
+
+	workspace, err := filepath.Abs(job.Workspace)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	if len(runner.Mounts) != 1 || runner.Mounts[0].Source != workspace {
+		t.Fatalf("runner mounts = %+v, want just the workspace at %s", runner.Mounts, workspace)
+	}
+	if !runner.Mounts[0].ReadOnly {
+		t.Error("the workspace must be read-only, or the app can rewrite its own source mid-run")
+	}
+	if runner.Mounts[0].Target != job.Spec.App.Workdir {
+		t.Errorf("workspace target = %q, want %q", runner.Mounts[0].Target, job.Spec.App.Workdir)
 	}
 }
 
-func TestRunCopiesTheHiddenTestsOnlyIntoTheTester(t *testing.T) {
+func TestRunGivesTheHiddenTestsOnlyToTheTester(t *testing.T) {
 	j, fake, job := newJob(t, "list-todos=pass", "create-todo=pass")
 
 	runOK(t, j, job)
 
-	var intoTester []string
-	for _, copied := range fake.copies {
-		if strings.Contains(copied, names.tester) {
-			intoTester = append(intoTester, copied)
-		}
+	tests, err := filepath.Abs(job.Spec.TestsDir())
+	if err != nil {
+		t.Fatalf("resolve tests dir: %v", err)
 	}
 
-	if len(intoTester) != 1 {
-		t.Fatalf("expected exactly one copy into the tester, got %v", intoTester)
+	mounts := fake.containers[names.tester].Mounts
+	if len(mounts) != 1 {
+		t.Fatalf("tester mounts = %+v, want just the hidden tests", mounts)
 	}
-	if !strings.HasPrefix(intoTester[0], job.Spec.TestsDir()) {
-		t.Errorf("the tester should receive the challenge's tests, got %q", intoTester[0])
+	if mounts[0].Source != tests {
+		t.Errorf("tester mount source = %q, want %q", mounts[0].Source, tests)
 	}
-	if !strings.HasSuffix(intoTester[0], names.tester+":"+judge.TestsDir) {
-		t.Errorf("the tests should land in %s, got %q", judge.TestsDir, intoTester[0])
+	if mounts[0].Target != judge.TestsDir {
+		t.Errorf("the tests should appear at %s, got %q", judge.TestsDir, mounts[0].Target)
+	}
+	if !mounts[0].ReadOnly {
+		t.Error("the hidden tests must be read-only")
 	}
 }
 
@@ -234,10 +255,8 @@ func TestRunRemovesEverythingWhateverFails(t *testing.T) {
 	steps := []string{
 		"network.create " + names.network,
 		"create " + names.runner,
-		"cp " + names.runner + " /app",
 		"start " + names.runner,
 		"create " + names.tester,
-		"cp " + names.tester + " " + judge.TestsDir,
 		"start " + names.tester,
 		"logs " + names.tester,
 	}
@@ -447,6 +466,46 @@ func TestRunRejectsAJobItCannotName(t *testing.T) {
 			}
 			if len(fake.events) != 0 {
 				t.Errorf("a job that cannot be named must create nothing, got:\n%s", fake.eventLog())
+			}
+		})
+	}
+}
+
+func TestRunConfinesBothContainers(t *testing.T) {
+	j, fake, job := newJob(t, "list-todos=pass", "create-todo=pass")
+
+	runOK(t, j, job)
+
+	for _, name := range []string{names.runner, names.tester} {
+		t.Run(name, func(t *testing.T) {
+			box := fake.containers[name].Sandbox
+
+			// The numbers are the challenge's.
+			if box.CPUs != job.Spec.Limits.CPUs {
+				t.Errorf("CPUs = %v, want the challenge's %v", box.CPUs, job.Spec.Limits.CPUs)
+			}
+			if box.MemoryMB != job.Spec.Limits.MemoryMB {
+				t.Errorf("MemoryMB = %d, want %d", box.MemoryMB, job.Spec.Limits.MemoryMB)
+			}
+			if box.PIDs != job.Spec.Limits.PIDs {
+				t.Errorf("PIDs = %d, want %d", box.PIDs, job.Spec.Limits.PIDs)
+			}
+
+			// The rest is fixed policy.
+			if !box.ReadOnlyRoot {
+				t.Error("the root filesystem must be read-only")
+			}
+			if box.Tmpfs[judge.ScratchDir] == "" {
+				t.Errorf("%s must be a tmpfs, or nothing can write anywhere", judge.ScratchDir)
+			}
+			if strings.Join(box.DropCapabilities, ",") != "ALL" {
+				t.Errorf("DropCapabilities = %v, want ALL", box.DropCapabilities)
+			}
+			if !box.NoNewPrivileges {
+				t.Error("no-new-privileges must be set")
+			}
+			if box.User != judge.SandboxUser || strings.HasPrefix(box.User, "0:") {
+				t.Errorf("User = %q, want the unprivileged %q", box.User, judge.SandboxUser)
 			}
 		})
 	}
