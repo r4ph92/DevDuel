@@ -56,7 +56,8 @@ design.
 cmd/api/           HTTP + WebSocket. Auth, workspace CRUD, match state.
 cmd/judge/         Queue consumer. The only component with Docker socket access.
 cmd/devduelctl/    Challenge authoring and verification CLI.
-internal/          match, matchmaker, workspace, judge, rating, realtime, store
+internal/          api, auth, match, matchmaker, workspace, judge, rating,
+                   realtime, store
 challenges/        One directory per challenge: spec, image, workspace, tests, solution
 web/               Vite + React + Monaco
 ```
@@ -109,6 +110,43 @@ migration, written deliberately.
 Migrating is an operator step rather than something a server does to itself on
 boot, since several API instances starting at once would all attempt it and a
 schema change deserves someone watching.
+
+### Running the API
+
+```bash
+go run ./cmd/devduelctl db migrate
+go run ./cmd/api
+```
+
+`API_ADDR`, `DATABASE_URL` and `COOKIE_SECURE` are the whole configuration.
+The server does not migrate on boot, since several instances starting at once
+would all attempt it.
+
+Three routes exist so far, plus `GET /health`:
+
+```
+POST /auth/register   {email, username, password} -> 201 {user}
+POST /auth/login      {email, password}           -> 200 {user, expires_at} + session cookie
+POST /auth/logout                                 -> 204
+```
+
+Passwords are argon2id, 64 MiB over two passes, with the parameters stored in
+the hash so raising them later leaves existing hashes verifiable; a login
+upgrades a hash that was made more cheaply. A session is 256 random bits in an
+HttpOnly cookie, and the database stores only its SHA-256, so a database that
+leaks does not hand over a set of live logins.
+
+A failed login answers the same way whether the address is unknown or the
+password is wrong, and takes the same time: when no account matches, the
+password is still verified against a decoy hash. Registration answers the same
+way whether it was the email or the username that collided. Neither of those
+is free to give up later without turning a form into a way of asking who has
+an account.
+
+**Login is not rate limited yet.** Each attempt costs 64 MiB and about a tenth
+of a second by design, which is a denial of service waiting for whoever finds
+it first. That belongs with the rest of the abuse work in M8, and this API
+should not be exposed to the internet before it lands.
 
 ### Database tests
 

@@ -118,6 +118,21 @@ func (q *Queries) CredentialsByEmail(ctx context.Context, email string) (Credent
 	return out, nil
 }
 
+// SetPasswordHash replaces a stored hash, which is how a login upgrades one
+// that was made with less cost than is asked for now.
+func (q *Queries) SetPasswordHash(ctx context.Context, user id.ID, hash string) error {
+	const update = `update users set password_hash = $2 where id = $1`
+
+	tag, err := q.db.Exec(ctx, update, user, hash)
+	if err != nil {
+		return translate(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Rating returns a player's standing, or [ErrNotFound].
 func (q *Queries) Rating(ctx context.Context, user id.ID) (Rating, error) {
 	const query = `select user_id, rating, games, updated_at from ratings where user_id = $1`
