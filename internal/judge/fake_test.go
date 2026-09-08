@@ -104,6 +104,10 @@ func (f *fakeRuntime) happened(event string) bool {
 	return false
 }
 
+func (f *fakeRuntime) BuildImage(ctx context.Context, spec container.ImageSpec) error {
+	return f.record(ctx, "build "+spec.Tag)
+}
+
 func (f *fakeRuntime) CreateNetwork(ctx context.Context, spec container.NetworkSpec) error {
 	if err := f.record(ctx, "network.create "+spec.Name); err != nil {
 		return err
