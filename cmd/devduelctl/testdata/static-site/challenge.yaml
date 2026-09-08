@@ -1,0 +1,35 @@
+# The smallest challenge that is genuinely a challenge: a static site with one
+# file missing. It exists so that `devduelctl challenge verify` can be tested
+# against something real rather than against a mock of itself.
+id: static-site
+version: 1
+category: debugging
+difficulty: easy
+duration: 15m
+
+image:
+  tag: devduel/static-site:1
+
+app:
+  command: ["/usr/sbin/httpd", "-f", "-p", "3000", "-h", "/app"]
+  port: 3000
+  health_path: /health.txt
+
+tester:
+  command: ["sh", "/tests/run.sh"]
+  timeout: 60s
+
+limits:
+  cpus: 1
+  memory_mb: 128
+  pids: 64
+
+requirements:
+  - key: health
+    title: the site answers on its health path
+    description: health.txt must be served, which it already is.
+
+  - key: list-todos
+    title: the site serves the todo list
+    description: todos.json is missing from the starting site.
+    broken: true

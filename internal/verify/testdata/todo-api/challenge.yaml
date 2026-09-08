@@ -1,0 +1,28 @@
+# Fixture challenge for the judge's orchestration tests. It is never built or
+# run; only its shape and its directories matter here.
+id: todo-api
+version: 1
+category: debugging
+difficulty: medium
+duration: 45m
+
+image:
+  tag: devduel/todo-api:1
+
+app:
+  command: ["node", "server.js"]
+  port: 3000
+
+tester:
+  command: ["pytest", "-q"]
+  timeout: 90s
+
+requirements:
+  - key: list-todos
+    title: GET /todos returns every todo
+    description: The list endpoint drops todos that are already completed.
+    broken: true
+
+  - key: create-todo
+    title: POST /todos creates a todo
+    description: Creating a todo must return 201 and the stored representation.

@@ -21,6 +21,11 @@ import "context"
 // are idempotent: removing something that is already gone is success, so
 // teardown can run on every path without the caller tracking what it created.
 type Runtime interface {
+	// BuildImage builds an image from a local build context. It is the one
+	// call allowed to reach the network, because it is the step that bakes
+	// dependencies in so that judging never has to.
+	BuildImage(ctx context.Context, spec ImageSpec) error
+
 	// CreateNetwork creates a network. The name must not already be in use.
 	CreateNetwork(ctx context.Context, spec NetworkSpec) error
 	// RemoveNetwork removes a network, or does nothing if it is already gone.
@@ -113,6 +118,21 @@ type Sandbox struct {
 	// User is the uid[:gid] to run as. Running as root inside the container
 	// is one kernel bug away from running as root on the host.
 	User string
+}
+
+// ImageSpec describes an image to build.
+type ImageSpec struct {
+	// Tag is the reference to build as, matching the challenge's image tag.
+	Tag string
+	// ContextDir is the local build context.
+	ContextDir string
+	// Dockerfile is the file to build from. Empty means the Dockerfile at the
+	// root of the context.
+	Dockerfile string
+	// NoCache forces every layer to be rebuilt, which is what proves a
+	// challenge image can still be built from scratch.
+	NoCache bool
+	Labels  map[string]string
 }
 
 // Mount is a host path made visible inside a container.

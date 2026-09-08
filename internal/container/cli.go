@@ -72,6 +72,25 @@ func NewCLI(opts ...Option) *CLI {
 
 var _ Runtime = (*CLI)(nil)
 
+// BuildImage runs `docker build`.
+//
+// Like the wait, a build takes as long as it takes, so it answers to the
+// caller's context rather than the per-command timeout.
+func (c *CLI) BuildImage(ctx context.Context, spec ImageSpec) error {
+	args := []string{"build", "--tag", spec.Tag}
+	if spec.Dockerfile != "" {
+		args = append(args, "--file", spec.Dockerfile)
+	}
+	if spec.NoCache {
+		args = append(args, "--no-cache")
+	}
+	args = appendLabels(args, spec.Labels)
+	args = append(args, spec.ContextDir)
+
+	_, err := c.exec(ctx, args)
+	return err
+}
+
 // CreateNetwork runs `docker network create`.
 func (c *CLI) CreateNetwork(ctx context.Context, spec NetworkSpec) error {
 	args := []string{"network", "create"}

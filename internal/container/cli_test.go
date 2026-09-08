@@ -550,3 +550,68 @@ func TestCreateContainerRendersFractionalCPUsExactly(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildImage(t *testing.T) {
+	cases := []struct {
+		name string
+		spec container.ImageSpec
+		want []string
+	}{
+		{
+			"a context and a tag",
+			container.ImageSpec{Tag: "devduel/todo-api:1", ContextDir: "/srv/challenge/image"},
+			[]string{"build", "--tag", "devduel/todo-api:1", "/srv/challenge/image"},
+		},
+		{
+			"everything",
+			container.ImageSpec{
+				Tag:        "devduel/todo-api:1",
+				ContextDir: "/srv/challenge/image",
+				Dockerfile: "/srv/challenge/image/Dockerfile.test",
+				NoCache:    true,
+				Labels:     map[string]string{"devduel.challenge": "todo-api"},
+			},
+			[]string{
+				"build", "--tag", "devduel/todo-api:1",
+				"--file", "/srv/challenge/image/Dockerfile.test",
+				"--no-cache",
+				"--label", "devduel.challenge=todo-api",
+				"/srv/challenge/image",
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cli, fake := newCLI(t, "")
+			if err := cli.BuildImage(t.Context(), c.spec); err != nil {
+				t.Fatalf("BuildImage: %v", err)
+			}
+			wantArgs(t, fake.onlyCall(t), c.want)
+		})
+	}
+}
+
+func TestBuildImageCarriesTheBuildOutputOnFailure(t *testing.T) {
+	cli, _ := newCLI(t, "echo 'Step 3/7 : RUN npm ci'; echo 'npm ERR! 404 Not Found' >&2; exit 1")
+
+	err := cli.BuildImage(t.Context(), container.ImageSpec{Tag: "x:1", ContextDir: "."})
+	if err == nil {
+		t.Fatal("BuildImage: expected an error, got nil")
+	}
+	// A build failure is unreadable without the build log.
+	for _, want := range []string{"Step 3/7", "npm ERR! 404"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should carry the build output %q, got:\n%v", want, err)
+		}
+	}
+}
+
+func TestBuildImageIsNotBoundedByTheCommandTimeout(t *testing.T) {
+	// Builds legitimately outlast every other docker call.
+	cli, _ := newCLI(t, "sleep 0.4", container.WithCommandTimeout(100*time.Millisecond))
+
+	if err := cli.BuildImage(t.Context(), container.ImageSpec{Tag: "x:1", ContextDir: "."}); err != nil {
+		t.Fatalf("BuildImage: %v", err)
+	}
+}
