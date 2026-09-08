@@ -169,6 +169,34 @@ func TestAMissingUserIsNotFound(t *testing.T) {
 	}
 }
 
+func TestSetPasswordHashReplacesWhatIsStored(t *testing.T) {
+	t.Parallel()
+	db := storetest.New(t)
+	ctx := t.Context()
+
+	user, err := db.CreateUser(ctx, newUser("rehashed"))
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if err := db.SetPasswordHash(ctx, user.ID, "the new hash"); err != nil {
+		t.Fatalf("SetPasswordHash: %v", err)
+	}
+
+	creds, err := db.CredentialsByEmail(ctx, "rehashed@example.test")
+	if err != nil {
+		t.Fatalf("CredentialsByEmail: %v", err)
+	}
+	if creds.Hash != "the new hash" {
+		t.Errorf("hash = %q, want the one that was just set", creds.Hash)
+	}
+
+	// Setting a hash on nobody is a caller bug, not a silent no-op.
+	if err := db.SetPasswordHash(ctx, id.New(), "orphan"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("SetPasswordHash for an unknown user = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCredentialsComeBackOnTheirOwn(t *testing.T) {
 	t.Parallel()
 	db := storetest.New(t)
