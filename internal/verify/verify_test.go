@@ -299,6 +299,21 @@ func TestChallengeFailsWhenAJudgeRunCannotBeCarriedOut(t *testing.T) {
 	}
 }
 
+func TestChallengePreservesJudgeFailureWhenTeardownAlsoFails(t *testing.T) {
+	judgeErr := errors.New("start runner: daemon disconnected")
+	teardownErr := &judge.TeardownError{Errs: []error{errors.New("remove network: daemon disconnected")}}
+	runner := &fakeRunner{err: errors.Join(judgeErr, teardownErr)}
+
+	_, err := verify.New(&fakeBuilder{}, runner).Challenge(t.Context(), spec(t))
+
+	if !errors.Is(err, judgeErr) || !errors.Is(err, teardownErr) {
+		t.Fatalf("Challenge: got %v, want both the judging and cleanup errors", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Errorf("judged %d times, want verification to stop after the failed run", len(runner.calls))
+	}
+}
+
 func TestChallengeStillReportsWhenAJudgeRunLeaksResources(t *testing.T) {
 	// A leaked container is the operator's problem. The results were sound,
 	// so the verdict stands rather than being thrown away.
@@ -321,5 +336,6 @@ type leakyRunner struct{ fakeRunner }
 
 func (l *leakyRunner) Run(ctx context.Context, job judge.Job) (judge.Report, error) {
 	report, _ := l.fakeRunner.Run(ctx, job)
-	return report, &judge.TeardownError{Errs: []error{errors.New("device or resource busy")}}
+	// Judge.Run joins cleanup errors even when judging itself succeeded.
+	return report, errors.Join(nil, &judge.TeardownError{Errs: []error{errors.New("device or resource busy")}})
 }

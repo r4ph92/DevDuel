@@ -142,8 +142,10 @@ func (v *Verifier) judge(ctx context.Context, spec *challenge.Spec, phase Phase,
 		// A judge run that produced results and then failed to clean up is
 		// still a run: the results are sound, and the leak is the operator's
 		// problem rather than the challenge author's.
+		// Judge.Run returns no results when judging fails and may join that
+		// failure with a teardown error. Preserve both errors in that case.
 		var teardownErr *judge.TeardownError
-		if !errors.As(err, &teardownErr) {
+		if len(report.Results) == 0 || !errors.As(err, &teardownErr) {
 			return nil, err
 		}
 	}
