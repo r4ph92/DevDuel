@@ -41,6 +41,31 @@ jobs:
     needs: detect
     if: needs.detect.outputs.go == 'true'
     runs-on: ubuntu-latest
+
+    # The schema tests skip themselves when there is no database, so without
+    # this job's Postgres they would go quietly green while never running.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: devduel
+          POSTGRES_PASSWORD: devduel
+          POSTGRES_DB: devduel
+        ports:
+          - 5432:5432
+        # The job starts as soon as the container does, which is well before
+        # Postgres accepts connections.
+        options: >-
+          --health-cmd "pg_isready -U devduel -d devduel"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Throwaway credentials for a database that exists for one job. Each
+      # test clones its own database off this one.
+      DATABASE_URL: postgres://devduel:devduel@localhost:5432/devduel?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

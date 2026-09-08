@@ -1,9 +1,14 @@
-// Command devduelctl is the challenge authoring tool.
+// Command devduelctl is DevDuel's operator tool.
 //
-// Its one job today is verification: deciding whether a challenge is fit to be
-// played, by building it and judging it against its own workspace and
-// solution. Everything about a challenge that cannot be checked by reading it
-// is checked here, before anyone is ranked on it.
+// It verifies challenges: deciding whether one is fit to be played, by
+// building it and judging it against its own workspace and solution.
+// Everything about a challenge that cannot be checked by reading it is
+// checked here, before anyone is ranked on it.
+//
+// It also migrates the database, which is deliberately a command an operator
+// runs rather than something a server does to itself on boot. Several API
+// instances starting at once would all try, and a schema change is a thing
+// somebody should be watching.
 package main
 
 import (
@@ -18,6 +23,7 @@ import (
 	"github.com/r4ph92/DevDuel/internal/challenge"
 	"github.com/r4ph92/DevDuel/internal/container"
 	"github.com/r4ph92/DevDuel/internal/judge"
+	"github.com/r4ph92/DevDuel/internal/store"
 	"github.com/r4ph92/DevDuel/internal/verify"
 )
 
@@ -39,32 +45,87 @@ func main() {
 // main should exit non-zero without adding to it.
 var errReported = errors.New("reported")
 
-const usage = `devduelctl is the DevDuel challenge authoring tool.
+const usage = `devduelctl is the DevDuel operator tool.
 
 Usage:
   devduelctl challenge verify <dir>   build a challenge and check it behaves as declared
+  devduelctl db migrate               bring the database up to the schema this binary carries
 `
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	help := &printer{w: stderr}
 
-	if len(args) < 2 || args[0] != "challenge" || args[1] != "verify" {
+	if len(args) < 2 {
 		help.print(usage)
 		return errors.New("unknown command")
 	}
 
+	switch args[0] + " " + args[1] {
+	case "challenge verify":
+		return runVerify(ctx, args[2:], stdout, stderr)
+	case "db migrate":
+		return runMigrate(ctx, args[2:], stdout, stderr)
+	default:
+		help.print(usage)
+		return errors.New("unknown command")
+	}
+}
+
+func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("challenge verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	if err := fs.Parse(args[2:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		help.print(usage)
+		(&printer{w: stderr}).print(usage)
 		return errors.New("challenge verify takes exactly one directory")
 	}
 
 	runtime := container.NewCLI()
 	return verifyChallenge(ctx, fs.Arg(0), runtime, judge.New(runtime), stdout)
+}
+
+// envDatabaseURL is where the connection string comes from when -url is not
+// given, so that a password never has to appear in a shell history.
+const envDatabaseURL = "DATABASE_URL"
+
+func runMigrate(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("db migrate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	url := fs.String("url", os.Getenv(envDatabaseURL), "postgres connection string, defaults to $"+envDatabaseURL)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		(&printer{w: stderr}).print(usage)
+		return errors.New("db migrate takes no arguments")
+	}
+	if *url == "" {
+		return fmt.Errorf("no database: pass -url or set $%s", envDatabaseURL)
+	}
+
+	db, err := store.Open(ctx, *url)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	applied, err := store.Migrate(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	p := &printer{w: stdout}
+	if len(applied) == 0 {
+		p.print("database is up to date\n")
+		return p.err
+	}
+	for _, m := range applied {
+		p.printf("applied %04d_%s\n", m.Version, m.Name)
+	}
+	p.printf("%s applied\n", plural(len(applied), "migration"))
+	return p.err
 }
 
 // verifyChallenge loads, verifies and reports on one challenge directory.
