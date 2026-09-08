@@ -13,7 +13,7 @@ import (
 // end: that it reports what it applied, and that a second run says so.
 func TestMigrateBringsAnEmptyDatabaseUp(t *testing.T) {
 	db := storetest.Empty(t)
-	url := db.Config().ConnString()
+	url := db.Pool().Config().ConnString()
 
 	var out, errOut bytes.Buffer
 	if err := run(t.Context(), []string{"db", "migrate", "-url", url}, &out, &errOut); err != nil {
