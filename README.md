@@ -85,14 +85,38 @@ The riskiest component comes first and needs no web code at all.
 ```bash
 cp .env.example .env
 docker compose up --wait   # postgres + redis; blocks until both are healthy
+go run ./cmd/devduelctl db migrate
 go test ./...
 ```
 
 `--wait` matters: with plain `-d` the services are merely started, not ready,
 and tests can connect before either accepts connections.
 
-Requires Docker running locally — the judge talks to the Docker daemon, and
-Postgres and Redis run as containers.
+Requires Docker running locally: the judge talks to the Docker daemon, and
+Postgres and Redis run as containers. If something already listens on 5432,
+change `POSTGRES_PORT` in `.env` and change the port in `DATABASE_URL` to
+match; they are two separate settings.
+
+### Migrations
+
+The schema lives in `internal/store/migrations`, embedded in the binary and
+applied by `devduelctl db migrate`. Migrations go forward only. There are no
+down migrations, and an already applied migration is never edited: the
+migrator checksums what it ran and refuses to continue against a database
+whose history disagrees with the files. Undoing a schema change is a new
+migration, written deliberately.
+
+Migrating is an operator step rather than something a server does to itself on
+boot, since several API instances starting at once would all attempt it and a
+schema change deserves someone watching.
+
+### Database tests
+
+`internal/store/storetest` gives each test its own database, cloned from a
+template that is migrated once. Tests skip themselves when `DATABASE_URL` is
+unset, so `go test ./...` still works before the compose services are up. CI
+sets it against a service container, which is where the schema tests actually
+have to run.
 
 ### Resetting the database
 
