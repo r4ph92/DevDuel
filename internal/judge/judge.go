@@ -119,6 +119,12 @@ type Job struct {
 	Spec *challenge.Spec
 	// Workspace is a local directory bind-mounted into the runner. It holds
 	// the player's files and nothing else.
+	//
+	// The runner reads it as [SandboxUser], so the directory and everything
+	// above it has to be traversable by that user: a 0700 directory, which is
+	// what os.MkdirTemp produces, is unreadable inside the container and
+	// fails as a permission error on the app's first read. Whatever
+	// materialises a workspace is responsible for its mode.
 	Workspace string
 }
 

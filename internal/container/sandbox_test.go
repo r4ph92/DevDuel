@@ -236,6 +236,13 @@ func TestSandboxLetsMountedFilesBeReadButNotWritten(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "server.js"), []byte("the player's code\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
+	// os.MkdirTemp makes this 0700, which uid 65534 cannot traverse on a
+	// Linux host. Docker Desktop's file sharing hides that, so without this
+	// the test would pass on a Mac and describe something the judge host does
+	// not do.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod fixture: %v", err)
+	}
 
 	script := `
 		set -e
