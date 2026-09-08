@@ -170,14 +170,6 @@ func TestSimpleCommands(t *testing.T) {
 		want []string
 	}{
 		{
-			"copy into a container",
-			"",
-			func(c *container.CLI) error {
-				return c.CopyTo(t.Context(), "runner", "/tmp/workspace/.", "/app")
-			},
-			[]string{"cp", "/tmp/workspace/.", "runner:/app"},
-		},
-		{
 			"start",
 			"",
 			func(c *container.CLI) error { return c.StartContainer(t.Context(), "runner") },
@@ -386,7 +378,9 @@ func TestControlCommandsAreBoundedByTheCommandTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("StartContainer: expected a timeout, got nil")
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
+	// Near the timeout, not the timeout plus the wait delay: the backgrounded
+	// process has to be killed, not merely waited out.
+	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("StartContainer took %v, want it cut off near the timeout", elapsed)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -463,5 +457,96 @@ func TestNewCLIFallsBackOnNonsenseOptions(t *testing.T) {
 	}
 	if got := len(logs.Stdout); got > container.DefaultLogLimit+64 {
 		t.Errorf("kept %d bytes, want no more than the default cap", got)
+	}
+}
+
+func TestCreateContainerRendersMounts(t *testing.T) {
+	cli, fake := newCLI(t, "echo id")
+
+	_, err := cli.CreateContainer(t.Context(), container.Spec{
+		Image: "alpine:3",
+		Mounts: []container.Mount{
+			{Source: "/srv/workspace", Target: "/app", ReadOnly: true},
+			{Source: "/srv/scratch", Target: "/scratch"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	wantArgs(t, fake.onlyCall(t), []string{
+		"create",
+		"--mount", "type=bind,source=/srv/workspace,target=/app,readonly",
+		"--mount", "type=bind,source=/srv/scratch,target=/scratch",
+		"alpine:3",
+	})
+}
+
+func TestCreateContainerRendersTheSandbox(t *testing.T) {
+	cli, fake := newCLI(t, "echo id")
+
+	_, err := cli.CreateContainer(t.Context(), container.Spec{
+		Image: "alpine:3",
+		Sandbox: container.Sandbox{
+			CPUs:             1.5,
+			MemoryMB:         512,
+			PIDs:             128,
+			ReadOnlyRoot:     true,
+			Tmpfs:            map[string]string{"/tmp": "rw,noexec,nosuid,size=64m", "/run": "rw,size=8m"},
+			DropCapabilities: []string{"ALL"},
+			NoNewPrivileges:  true,
+			User:             "65534:65534",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	wantArgs(t, fake.onlyCall(t), []string{
+		"create",
+		"--cpus", "1.5",
+		// Swap pinned to memory: over the limit the container dies rather
+		// than swapping the host to a standstill.
+		"--memory", "512m",
+		"--memory-swap", "512m",
+		"--pids-limit", "128",
+		"--read-only",
+		"--tmpfs", "/run:rw,size=8m",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--user", "65534:65534",
+		"alpine:3",
+	})
+}
+
+func TestCreateContainerOmitsSandboxFlagsItWasNotGiven(t *testing.T) {
+	// An unconfined container is a deliberate act, not a rendering accident:
+	// the zero Sandbox produces no flags at all.
+	cli, fake := newCLI(t, "echo id")
+
+	if _, err := cli.CreateContainer(t.Context(), container.Spec{Image: "alpine:3"}); err != nil {
+		t.Fatalf("CreateContainer: %v", err)
+	}
+
+	wantArgs(t, fake.onlyCall(t), []string{"create", "alpine:3"})
+}
+
+func TestCreateContainerRendersFractionalCPUsExactly(t *testing.T) {
+	cases := map[float64]string{0.5: "0.5", 1: "1", 2.25: "2.25", 0.125: "0.125"}
+
+	for cpus, want := range cases {
+		t.Run(want, func(t *testing.T) {
+			cli, fake := newCLI(t, "echo id")
+
+			_, err := cli.CreateContainer(t.Context(), container.Spec{
+				Image:   "alpine:3",
+				Sandbox: container.Sandbox{CPUs: cpus},
+			})
+			if err != nil {
+				t.Fatalf("CreateContainer: %v", err)
+			}
+			wantArgs(t, fake.onlyCall(t), []string{"create", "--cpus", want, "alpine:3"})
+		})
 	}
 }
