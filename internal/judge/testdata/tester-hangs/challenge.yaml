@@ -1,0 +1,32 @@
+# The tester outlives its own timeout. The judge has to cut it off and say so
+# in a way that cannot be mistaken for tests that ran and failed.
+id: tester-hangs
+version: 1
+category: debugging
+difficulty: easy
+duration: 15m
+
+image:
+  tag: alpine:3
+
+app:
+  command: ["sleep", "300"]
+  port: 3000
+
+tester:
+  command: ["sleep", "300"]
+  timeout: 3s
+
+limits:
+  cpus: 1
+  memory_mb: 128
+  pids: 32
+
+requirements:
+  - key: first
+    title: the first requirement
+    description: Never reported, because the tester never finished.
+    broken: true
+  - key: second
+    title: the second requirement
+    description: Never reported either.
