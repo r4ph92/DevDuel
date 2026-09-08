@@ -82,6 +82,8 @@ func judgeSandbox() container.Sandbox {
 		DropCapabilities: []string{"ALL"},
 		NoNewPrivileges:  true,
 		User:             "65534:65534",
+		MaxLogSizeMB:     16,
+		MaxLogFiles:      2,
 	}
 }
 
@@ -181,6 +183,48 @@ func TestSandboxCapsAFloodOfOutputWithoutGrowingTheHeap(t *testing.T) {
 	}
 }
 
+func TestSandboxBoundsWhatTheDaemonWritesToTheHost(t *testing.T) {
+	// The read cap bounds the judge's memory and nothing else: docker keeps
+	// every byte a container prints, on the host's disk, until the container
+	// is removed. Measured before this bound existed, 200MB of stdout became
+	// 200,842,352 bytes under /var/lib/docker.
+	cli := requireDocker(t)
+
+	const (
+		written = 100 << 20
+		capMB   = 1
+	)
+	box := judgeSandbox()
+	box.MaxLogSizeMB = capMB
+	box.MaxLogFiles = 1
+
+	name := sandboxed(t, cli, box,
+		`yes 0123456789012345678901234567890123456789012345678901234567890123 | head -c 104857600`)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	if err := cli.StartContainer(ctx, name); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := cli.WaitContainer(ctx, name); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+
+	logs, err := cli.Logs(ctx, name)
+	if err != nil {
+		t.Fatalf("logs: %v", err)
+	}
+
+	// Everything docker still had: what we kept, plus what we dropped while
+	// reading. Rotation means that is a small multiple of the cap rather than
+	// everything the container printed.
+	received := len(logs.Stdout) + len(logs.Stderr) + logs.Elided
+	if limit := 8 * capMB << 20; received > limit {
+		t.Errorf("docker still held %d bytes of a %d byte flood, want under %d: rotation is not bounding the host",
+			received, written, limit)
+	}
+}
+
 func TestSandboxLetsMountedFilesBeReadButNotWritten(t *testing.T) {
 	// The judge mounts a workspace in and runs it as an unprivileged user
 	// under a read-only root. That combination has to actually work, and it
@@ -191,6 +235,13 @@ func TestSandboxLetsMountedFilesBeReadButNotWritten(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "server.js"), []byte("the player's code\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
+	}
+	// os.MkdirTemp makes this 0700, which uid 65534 cannot traverse on a
+	// Linux host. Docker Desktop's file sharing hides that, so without this
+	// the test would pass on a Mac and describe something the judge host does
+	// not do.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod fixture: %v", err)
 	}
 
 	script := `

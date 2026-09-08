@@ -118,6 +118,15 @@ type Sandbox struct {
 	// User is the uid[:gid] to run as. Running as root inside the container
 	// is one kernel bug away from running as root on the host.
 	User string
+	// MaxLogSizeMB and MaxLogFiles bound what the daemon writes to the host's
+	// disk. The read cap in this package only bounds memory: docker keeps
+	// every byte a container prints, so a gigabyte of stdout is a gigabyte on
+	// the host until the container is removed.
+	//
+	// Rotation drops the oldest output, so set these well above the read cap:
+	// what survives has to still contain both ends of anything worth reading.
+	MaxLogSizeMB int
+	MaxLogFiles  int
 }
 
 // ImageSpec describes an image to build.

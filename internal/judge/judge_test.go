@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/r4ph92/DevDuel/internal/challenge"
+	"github.com/r4ph92/DevDuel/internal/container"
 	"github.com/r4ph92/DevDuel/internal/judge"
 	"github.com/r4ph92/DevDuel/internal/tester"
 )
@@ -506,6 +507,16 @@ func TestRunConfinesBothContainers(t *testing.T) {
 			}
 			if box.User != judge.SandboxUser || strings.HasPrefix(box.User, "0:") {
 				t.Errorf("User = %q, want the unprivileged %q", box.User, judge.SandboxUser)
+			}
+
+			// The read cap bounds memory; this bounds the host's disk. A
+			// container printing without end writes every byte to
+			// /var/lib/docker until it is removed.
+			if box.MaxLogSizeMB <= 0 || box.MaxLogFiles <= 0 {
+				t.Errorf("log growth is unbounded: size=%dMB files=%d", box.MaxLogSizeMB, box.MaxLogFiles)
+			}
+			if box.MaxLogSizeMB*1024*1024 <= container.DefaultLogLimit {
+				t.Errorf("the host log cap (%dMB) must exceed what the judge reads back", box.MaxLogSizeMB)
 			}
 		})
 	}

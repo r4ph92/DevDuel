@@ -333,6 +333,19 @@ func appendSandbox(args []string, s Sandbox) []string {
 	if s.User != "" {
 		args = append(args, "--user", s.User)
 	}
+	if s.MaxLogSizeMB > 0 {
+		// The driver is named explicitly because max-size means nothing to
+		// some of them, and because `docker logs` has to keep working.
+		args = append(args,
+			"--log-driver", "json-file",
+			"--log-opt", "max-size="+strconv.Itoa(s.MaxLogSizeMB)+"m")
+
+		files := s.MaxLogFiles
+		if files < 1 {
+			files = 1
+		}
+		args = append(args, "--log-opt", "max-file="+strconv.Itoa(files))
+	}
 	return args
 }
 
