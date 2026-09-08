@@ -219,3 +219,27 @@ func writeVariant(t *testing.T, root, name, id string, version int) {
 		t.Fatalf("write spec: %v", err)
 	}
 }
+
+func TestEveryShippedChallengeLoads(t *testing.T) {
+	// The challenges directory is what players are served. A spec that does
+	// not load, or a challenge missing a directory the judge needs, should
+	// fail here rather than in somebody's match.
+	specs, err := challenge.LoadAll("../../challenges")
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(specs) == 0 {
+		t.Fatal("no challenges found; this guards a directory that should not be empty")
+	}
+
+	for _, spec := range specs {
+		broken := 0
+		for _, req := range spec.Requirements {
+			if req.Broken {
+				broken++
+			}
+		}
+		t.Logf("%s: %d requirements, %d declared broken, %d total weight",
+			spec.Key(), len(spec.Requirements), broken, spec.TotalWeight())
+	}
+}
