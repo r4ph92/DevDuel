@@ -12,6 +12,9 @@ import "errors"
 // says "no such account" just as loudly as a message would.
 var ErrInvalidCredentials = errors.New("auth: invalid credentials")
 
+// ErrInvalidSession means the token is malformed, unknown, expired or revoked.
+var ErrInvalidSession = errors.New("auth: invalid session")
+
 // ErrTaken means the email address or the username is already registered. It
 // does not say which, and callers must not guess.
 var ErrTaken = errors.New("auth: email or username is taken")
