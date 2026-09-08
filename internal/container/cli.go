@@ -109,7 +109,9 @@ func (c *CLI) CreateContainer(ctx context.Context, spec Spec) (string, error) {
 	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
 		args = append(args, "--env", k+"="+spec.Env[k])
 	}
+	args = appendMounts(args, spec.Mounts)
 	args = appendLabels(args, spec.Labels)
+	args = appendSandbox(args, spec.Sandbox)
 	args = append(args, spec.Image)
 	args = append(args, spec.Command...)
 
@@ -123,12 +125,6 @@ func (c *CLI) CreateContainer(ctx context.Context, spec Spec) (string, error) {
 		return "", res.failure("printed no container id")
 	}
 	return id, nil
-}
-
-// CopyTo runs `docker cp` from a local path into the container.
-func (c *CLI) CopyTo(ctx context.Context, name, src, dst string) error {
-	_, err := c.run(ctx, []string{"cp", src, name + ":" + dst})
-	return err
 }
 
 // StartContainer runs `docker start`, which returns as soon as the container
@@ -225,6 +221,7 @@ func (c *CLI) exec(ctx context.Context, args []string) (*result, error) {
 	cmd.Stdout = res.stdout
 	cmd.Stderr = res.stderr
 	cmd.WaitDelay = waitDelay
+	confine(cmd)
 
 	err := cmd.Run()
 	if err == nil {
@@ -268,6 +265,56 @@ func ignoreAlreadyGone(err error) error {
 		}
 	}
 	return err
+}
+
+func appendMounts(args []string, mounts []Mount) []string {
+	for _, m := range mounts {
+		spec := "type=bind,source=" + m.Source + ",target=" + m.Target
+		if m.ReadOnly {
+			spec += ",readonly"
+		}
+		args = append(args, "--mount", spec)
+	}
+	return args
+}
+
+// appendSandbox renders the confinement flags. A zero field renders nothing,
+// so an unconfined container is something a caller asked for rather than
+// something that happened.
+func appendSandbox(args []string, s Sandbox) []string {
+	if s.CPUs > 0 {
+		args = append(args, "--cpus", strconv.FormatFloat(s.CPUs, 'f', -1, 64))
+	}
+	if s.MemoryMB > 0 {
+		size := strconv.Itoa(s.MemoryMB) + "m"
+		// Equal memory and memory-swap means no swap. Without this a
+		// container over its limit swaps instead of dying, and takes the
+		// host's disk throughput with it.
+		args = append(args, "--memory", size, "--memory-swap", size)
+	}
+	if s.PIDs > 0 {
+		args = append(args, "--pids-limit", strconv.Itoa(s.PIDs))
+	}
+	if s.ReadOnlyRoot {
+		args = append(args, "--read-only")
+	}
+	for _, path := range slices.Sorted(maps.Keys(s.Tmpfs)) {
+		mount := path
+		if opts := s.Tmpfs[path]; opts != "" {
+			mount += ":" + opts
+		}
+		args = append(args, "--tmpfs", mount)
+	}
+	for _, capability := range s.DropCapabilities {
+		args = append(args, "--cap-drop", capability)
+	}
+	if s.NoNewPrivileges {
+		args = append(args, "--security-opt", "no-new-privileges")
+	}
+	if s.User != "" {
+		args = append(args, "--user", s.User)
+	}
+	return args
 }
 
 func appendLabels(args []string, labels map[string]string) []string {

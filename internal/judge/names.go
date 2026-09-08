@@ -3,7 +3,6 @@ package judge
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 )
 
@@ -46,10 +45,4 @@ func (j Job) validate() error {
 		return errors.New("job has no workspace directory")
 	}
 	return nil
-}
-
-// contentsOf is the docker cp spelling for "everything inside this directory"
-// rather than the directory itself.
-func contentsOf(dir string) string {
-	return filepath.Clean(dir) + string(filepath.Separator) + "."
 }
