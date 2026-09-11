@@ -1,0 +1,16 @@
+-- Readying up.
+--
+-- A full lobby does not start on its own. Each player says they are ready and
+-- the second one starts the clock, so nobody loses time to an opponent who
+-- filled the second seat and then walked away from the keyboard.
+--
+-- Unlike 0003 this is a nullable column with no backfill, so it neither
+-- rewrites the table nor holds a lock worth planning around. Undoing it is a
+-- later migration that drops the column.
+--
+-- It deliberately does not touch the membership triggers from 0003. Those
+-- fire on insert and on updates naming match_id or unfinished, so marking a
+-- player ready does not reach for the match row. The transition that follows
+-- a ready does take that row, and takes it first, which is the order every
+-- writer of both rows uses.
+alter table match_players add column ready_at timestamptz;
