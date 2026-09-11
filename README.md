@@ -253,3 +253,13 @@ docker compose up --wait
 
 `main` is protected. Work on a branch, open a pull request, let CI and
 CodeRabbit review it, then merge.
+
+CodeRabbit is configured in `.coderabbit.yaml`, but **it does not review
+automatically here**: its free tier for open source skips repositories with
+fewer than 10 stars, and this one has one. Comment `@coderabbitai review` on a
+pull request to get a review, until that changes.
+
+It also skips a pull request whose base is not `main`, so a branch stacked on
+another branch goes unreviewed even once the star rule is met. Prefer basing
+work on `main`, and when a change really does have to stack, ask for the
+review by hand.

@@ -28,7 +28,7 @@ reviews:
       instructions: >-
         Flag unchecked errors, goroutine leaks, missing context propagation,
         and any database write that should be inside a transaction. Match
-        Match state transitions must be idempotent.
+        state transitions must be idempotent.
     - path: "web/**"
       instructions: >-
         The match timer is server-authoritative. Flag any client-side code
