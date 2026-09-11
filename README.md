@@ -139,6 +139,8 @@ POST /matches/join    {code}                      -> 200 {match}
 GET  /matches/current                             -> 200 {match}
 GET  /matches/{id}                                -> 200 {match}
 POST /matches/{id}/leave                          -> 204
+POST /matches/{id}/ready                          -> 200 {match}
+POST /matches/{id}/submit                         -> 200 {match}
 ```
 
 `GET /me` returns the signed-in user's ID, username, email and creation time.
@@ -193,6 +195,36 @@ Leaving cancels the whole lobby and releases both players; leaving twice is
 not an error, because a retried request should not become one. Starting the
 clock belongs to the match state machine, and the lobby screens belong to the
 web client.
+
+### Match lifecycle
+
+```
+lobby --both ready--> active --both submitted--> judging
+                         `------deadline-------'
+```
+
+A full lobby does not start on its own. Each player readies, and the second
+ready starts the clock, so nobody loses minutes to an opponent who filled the
+seat and walked away. `started_at` and `deadline_at` are written together from
+the challenge's own duration, in SQL, so no caller anywhere decides how long a
+match lasts, and remaining time is stored nowhere: a response carries the
+deadline and the server's own `server_now` to measure it against.
+
+Every transition is a compare and swap, an update guarded on the state it is
+leaving, and the rows it touched say whether this caller was the one that
+moved the match. Both players submitting and the deadline firing happen at the
+same instant by design, so the loser of that race has to be a no-op rather
+than a second transition. There is a test that fires all three at once and
+asserts exactly one of them moved the match.
+
+Each of those transactions takes the match row before it writes a player row,
+because the trigger from 0003 updates every seat when a match changes state. A
+writer that took a seat first and then reached for the match would deadlock
+against one going the other way.
+
+`judging` is where this stops for now. Reaching `complete` needs judge results
+and scoring, which are their own issues, and the ticker that fires expiries
+belongs to the timer work; this half only provides the transition it calls.
 
 ### Database tests
 

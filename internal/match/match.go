@@ -121,6 +121,25 @@ func (s *Service) Leave(ctx context.Context, match, user id.ID) error {
 	return s.db.CancelLobby(ctx, match, user)
 }
 
+// Ready marks user ready, and starts the match once both players are. The
+// bool is true only for the call that started it.
+func (s *Service) Ready(ctx context.Context, match, user id.ID) (store.Match, bool, error) {
+	return s.db.ReadyUp(ctx, match, user)
+}
+
+// Submit records that user is done, and moves the match to judging once both
+// players are. The bool is true only for the call that moved it.
+func (s *Service) Submit(ctx context.Context, match, user id.ID) (store.Match, bool, error) {
+	return s.db.Submit(ctx, match, user)
+}
+
+// Expire moves a match past its deadline to judging. It answers to the
+// deadline finalizer rather than to a player, which is why it takes no user:
+// running out of time is not something either of them does.
+func (s *Service) Expire(ctx context.Context, match id.ID) (bool, error) {
+	return s.db.Expire(ctx, match)
+}
+
 // newCode draws a join code.
 //
 // The alphabet has 32 symbols and a byte has 256 values, so the remainder is
