@@ -21,9 +21,17 @@ type matchBody struct {
 	// Code is the join code, and is dropped once the match leaves the lobby:
 	// codes are recycled from that moment, so a stale one names a lobby that
 	// belongs to somebody else.
-	Code      string       `json:"code,omitempty"`
-	Players   []playerBody `json:"players"`
-	CreatedAt time.Time    `json:"created_at"`
+	Code    string       `json:"code,omitempty"`
+	Players []playerBody `json:"players"`
+	// StartedAt and DeadlineAt appear once the match is running. The clock is
+	// the server's: a client renders the time left as DeadlineAt minus
+	// ServerNow, and never from its own clock, which may be wrong by minutes.
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	DeadlineAt *time.Time `json:"deadline_at,omitempty"`
+	// ServerNow is what the clock above is to be read against, and is sent
+	// with every match so a client can correct for its own drift.
+	ServerNow time.Time `json:"server_now"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // playerBody is an opponent as the other player sees them: a name and a seat,
@@ -31,19 +39,31 @@ type matchBody struct {
 type playerBody struct {
 	Username string `json:"username"`
 	Slot     int    `json:"slot"`
+	// Ready and Submitted are what the other player is allowed to know: that
+	// somebody is waiting or done, never when or what they wrote.
+	Ready     bool `json:"ready"`
+	Submitted bool `json:"submitted"`
 }
 
 func newMatchBody(m store.Match) matchBody {
 	players := make([]playerBody, len(m.Players))
 	for i, p := range m.Players {
-		players[i] = playerBody{Username: p.Username, Slot: p.Slot}
+		players[i] = playerBody{
+			Username:  p.Username,
+			Slot:      p.Slot,
+			Ready:     p.ReadyAt != nil,
+			Submitted: p.SubmittedAt != nil,
+		}
 	}
 
 	body := matchBody{
-		ID:        m.ID.String(),
-		State:     string(m.State),
-		Players:   players,
-		CreatedAt: m.CreatedAt,
+		ID:         m.ID.String(),
+		State:      string(m.State),
+		Players:    players,
+		StartedAt:  utc(m.StartedAt),
+		DeadlineAt: utc(m.DeadlineAt),
+		ServerNow:  time.Now().UTC(),
+		CreatedAt:  m.CreatedAt.UTC(),
 	}
 	if m.State == store.MatchLobby {
 		body.Code = m.Code
@@ -53,6 +73,18 @@ func newMatchBody(m store.Match) matchBody {
 
 type matchResponse struct {
 	Match matchBody `json:"match"`
+}
+
+// utc renders a timestamp in UTC so that every time in one response has the
+// same shape. The database hands back whatever offset the session happened to
+// have, and a client comparing a deadline against server_now should not have
+// to notice that the two arrived spelled differently.
+func utc(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	in := t.UTC()
+	return &in
 }
 
 func (s *server) createLobby(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +185,45 @@ func (s *server) leaveMatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *server) readyMatch(w http.ResponseWriter, r *http.Request) {
+	s.transition(w, r, func(match, user id.ID) (store.Match, error) {
+		updated, _, err := s.match.Ready(r.Context(), match, user)
+		return updated, err
+	})
+}
+
+func (s *server) submitMatch(w http.ResponseWriter, r *http.Request) {
+	s.transition(w, r, func(match, user id.ID) (store.Match, error) {
+		updated, _, err := s.match.Submit(r.Context(), match, user)
+		return updated, err
+	})
+}
+
+// transition is the shape both readying and submitting take: identify the
+// caller, read the match out of the path, act, and answer with the match as
+// it now stands. Whether this caller was the one that moved the match is not
+// in the answer, because both players are told the same thing either way.
+func (s *server) transition(w http.ResponseWriter, r *http.Request, act func(match, user id.ID) (store.Match, error)) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		writeError(w, s.log, http.StatusInternalServerError, "internal", "Something went wrong.")
+		return
+	}
+
+	target, err := id.Parse(r.PathValue("id"))
+	if err != nil {
+		s.writeMatchError(w, r, store.ErrNotFound)
+		return
+	}
+
+	updated, err := act(target, user.ID)
+	if err != nil {
+		s.writeMatchError(w, r, err)
+		return
+	}
+	writeJSON(w, s.log, http.StatusOK, matchResponse{Match: newMatchBody(updated)})
+}
+
 // writeMatchError turns what the match service reports into a response.
 //
 // A match the caller is not in is a 404 rather than a 403, the same answer as
@@ -179,6 +250,14 @@ func (s *server) writeMatchError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, store.ErrMatchStarted):
 		writeError(w, s.log, http.StatusConflict, "already_started",
 			"That match has already started.")
+
+	case errors.Is(err, store.ErrLobbyIncomplete):
+		writeError(w, s.log, http.StatusConflict, "lobby_incomplete",
+			"Wait for another player before starting.")
+
+	case errors.Is(err, store.ErrMatchNotActive):
+		writeError(w, s.log, http.StatusConflict, "not_active",
+			"That match is not running.")
 
 	case errors.Is(err, match.ErrNoChallenges):
 		// The catalog is registered before the server listens, so this is the

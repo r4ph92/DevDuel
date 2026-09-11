@@ -15,10 +15,15 @@ type matchView struct {
 		State   string `json:"state"`
 		Code    string `json:"code"`
 		Players []struct {
-			Username string `json:"username"`
-			Slot     int    `json:"slot"`
+			Username  string `json:"username"`
+			Slot      int    `json:"slot"`
+			Ready     bool   `json:"ready"`
+			Submitted bool   `json:"submitted"`
 		} `json:"players"`
-		CreatedAt time.Time `json:"created_at"`
+		StartedAt  *time.Time `json:"started_at"`
+		DeadlineAt *time.Time `json:"deadline_at"`
+		ServerNow  time.Time  `json:"server_now"`
+		CreatedAt  time.Time  `json:"created_at"`
 	} `json:"match"`
 }
 

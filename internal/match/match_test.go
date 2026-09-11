@@ -184,6 +184,50 @@ func TestGetAndCurrentAnswerOnlyToPlayers(t *testing.T) {
 	}
 }
 
+// The service is a thin seam over the transitions, so this checks that the
+// seam is wired, not the transitions themselves, which have their own tests.
+func TestTheLifecycleRunsThroughTheService(t *testing.T) {
+	t.Parallel()
+	svc, db := newService(t)
+	host, guest := newPlayer(t, db), newPlayer(t, db)
+
+	lobby, err := svc.Create(t.Context(), host)
+	if err != nil {
+		t.Fatalf("create lobby: %v", err)
+	}
+	if _, err := svc.Join(t.Context(), guest, lobby.Code); err != nil {
+		t.Fatalf("join lobby: %v", err)
+	}
+
+	if _, started, err := svc.Ready(t.Context(), lobby.ID, host); err != nil || started {
+		t.Fatalf("host readies: started=%v err=%v", started, err)
+	}
+	running, started, err := svc.Ready(t.Context(), lobby.ID, guest)
+	if err != nil || !started {
+		t.Fatalf("guest readies: started=%v err=%v", started, err)
+	}
+	if running.State != store.MatchActive {
+		t.Fatalf("state = %q, want active", running.State)
+	}
+
+	if _, judging, err := svc.Submit(t.Context(), lobby.ID, host); err != nil || judging {
+		t.Fatalf("host submits: judging=%v err=%v", judging, err)
+	}
+	done, judging, err := svc.Submit(t.Context(), lobby.ID, guest)
+	if err != nil || !judging {
+		t.Fatalf("guest submits: judging=%v err=%v", judging, err)
+	}
+	if done.State != store.MatchJudging {
+		t.Errorf("state = %q, want judging", done.State)
+	}
+
+	// Expiring answers to the finalizer, and a match already past judging is
+	// nothing for it to move.
+	if moved, err := svc.Expire(t.Context(), lobby.ID); err != nil || moved {
+		t.Errorf("expiring a finished match: moved=%v err=%v", moved, err)
+	}
+}
+
 func TestLeaveReleasesBothPlayers(t *testing.T) {
 	t.Parallel()
 	svc, db := newService(t)

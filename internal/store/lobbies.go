@@ -33,6 +33,14 @@ type Match struct {
 	State     MatchState
 	Challenge challenge.Key
 	CreatedAt time.Time
+	// StartedAt and DeadlineAt are the clock. They are written together when
+	// the match starts and never again, and are nil while it is still a
+	// lobby. Remaining time is nobody's column: it is DeadlineAt minus the
+	// server's now, worked out wherever it is needed.
+	StartedAt  *time.Time
+	DeadlineAt *time.Time
+	// EndedAt is set when the match reaches a state it cannot leave.
+	EndedAt *time.Time
 	// Players in slot order. A match always has at least its host.
 	Players []Player
 }
@@ -43,6 +51,10 @@ type Player struct {
 	Username string
 	Slot     int
 	JoinedAt time.Time
+	// ReadyAt is when this player said they were ready to start, and
+	// SubmittedAt when they said they were done. Both are nil until then.
+	ReadyAt     *time.Time
+	SubmittedAt *time.Time
 }
 
 // Has reports whether user is seated in the match.
@@ -188,15 +200,9 @@ func (q *Queries) CurrentMatch(ctx context.Context, user id.ID) (Match, error) {
 // and a match the user is not in is [ErrNotFound].
 func (q *Queries) CancelLobby(ctx context.Context, match, user id.ID) error {
 	return q.InTx(ctx, func(q *Queries) error {
-		// Locked first, so a joiner cannot slip in between the read and the
-		// update, and so this takes the match before its players like every
-		// other writer does.
-		const lock = `select 1 from matches where id = $1 for update`
-		if _, err := q.db.Exec(ctx, lock, match); err != nil {
-			return translate(err)
-		}
-
-		m, err := q.MatchForPlayer(ctx, match, user)
+		// Locked before its players, like every other writer of both rows, so
+		// a joiner cannot slip in between the read and the update.
+		m, err := q.lockMatchForPlayer(ctx, match, user)
 		if err != nil {
 			return err
 		}
@@ -222,7 +228,8 @@ func (q *Queries) CancelLobby(ctx context.Context, match, user id.ID) error {
 // cannot disagree about a join that landed in between.
 func (q *Queries) matchByID(ctx context.Context, match id.ID) (Match, error) {
 	const query = `select m.id, m.lobby_code, m.state, m.challenge_id, m.challenge_version, m.created_at,
-			p.user_id, u.username, p.slot, p.joined_at
+			m.started_at, m.deadline_at, m.ended_at,
+			p.user_id, u.username, p.slot, p.joined_at, p.ready_at, p.submitted_at
 		from matches m
 		join match_players p on p.match_id = m.id
 		join users u on u.id = p.user_id
@@ -239,7 +246,8 @@ func (q *Queries) matchByID(ctx context.Context, match id.ID) (Match, error) {
 	for rows.Next() {
 		var p Player
 		err := rows.Scan(&out.ID, &out.Code, &out.State, &out.Challenge.ID, &out.Challenge.Version, &out.CreatedAt,
-			&p.UserID, &p.Username, &p.Slot, &p.JoinedAt)
+			&out.StartedAt, &out.DeadlineAt, &out.EndedAt,
+			&p.UserID, &p.Username, &p.Slot, &p.JoinedAt, &p.ReadyAt, &p.SubmittedAt)
 		if err != nil {
 			return Match{}, fmt.Errorf("store: read match: %w", err)
 		}

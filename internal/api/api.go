@@ -59,6 +59,8 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /matches/current", s.requireUser(http.HandlerFunc(s.currentMatch)))
 	mux.Handle("GET /matches/{id}", s.requireUser(http.HandlerFunc(s.readMatch)))
 	mux.Handle("POST /matches/{id}/leave", s.requireUser(http.HandlerFunc(s.leaveMatch)))
+	mux.Handle("POST /matches/{id}/ready", s.requireUser(http.HandlerFunc(s.readyMatch)))
+	mux.Handle("POST /matches/{id}/submit", s.requireUser(http.HandlerFunc(s.submitMatch)))
 
 	// Recovery outermost, so that a panic inside the logging middleware's own
 	// call to the handler is still caught, and the request is still logged.

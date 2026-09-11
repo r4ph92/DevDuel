@@ -36,9 +36,18 @@ var ErrInUnfinishedMatch = errors.New("store: player is already in an unfinished
 // ErrLobbyFull means both seats of the lobby are taken.
 var ErrLobbyFull = errors.New("store: lobby is full")
 
-// ErrMatchStarted means a lobby operation came too late: the match has
-// already left the lobby.
-var ErrMatchStarted = errors.New("store: match has already started")
+// ErrMatchStarted means a lobby operation came too late: the match is no
+// longer in its lobby, whether because it started or because it was
+// abandoned. Either way there is no lobby left to act on.
+var ErrMatchStarted = errors.New("store: match has already left its lobby")
+
+// ErrLobbyIncomplete means a player tried to start a match with a seat still
+// empty. A duel needs two.
+var ErrLobbyIncomplete = errors.New("store: lobby does not have two players")
+
+// ErrMatchNotActive means the match is not running, so there is nothing to
+// submit to: it has either not started or already finished.
+var ErrMatchNotActive = errors.New("store: match is not active")
 
 // uniqueViolation is the SQLSTATE for a broken unique constraint.
 const uniqueViolation = "23505"
