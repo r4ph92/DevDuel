@@ -62,6 +62,13 @@ func New(cfg Config) http.Handler {
 	mux.Handle("POST /matches/{id}/ready", s.requireUser(http.HandlerFunc(s.readyMatch)))
 	mux.Handle("POST /matches/{id}/submit", s.requireUser(http.HandlerFunc(s.submitMatch)))
 
+	// A workspace belongs to a match and a player together, and the player is
+	// the session, so none of these paths can name the opponent's files.
+	mux.Handle("GET /matches/{id}/files", s.requireUser(http.HandlerFunc(s.listFiles)))
+	mux.Handle("GET /matches/{id}/files/{path...}", s.requireUser(http.HandlerFunc(s.readFile)))
+	mux.Handle("PUT /matches/{id}/files/{path...}", s.requireUser(http.HandlerFunc(s.writeFile)))
+	mux.Handle("DELETE /matches/{id}/files/{path...}", s.requireUser(http.HandlerFunc(s.deleteFile)))
+
 	// Recovery outermost, so that a panic inside the logging middleware's own
 	// call to the handler is still caught, and the request is still logged.
 	return recoverPanics(cfg.Logger, logRequests(cfg.Logger, mux))

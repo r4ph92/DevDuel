@@ -141,6 +141,11 @@ GET  /matches/{id}                                -> 200 {match}
 POST /matches/{id}/leave                          -> 204
 POST /matches/{id}/ready                          -> 200 {match}
 POST /matches/{id}/submit                         -> 200 {match}
+
+GET    /matches/{id}/files                        -> 200 {files}
+GET    /matches/{id}/files/{path}                 -> 200 the file's bytes
+PUT    /matches/{id}/files/{path}                 -> 204
+DELETE /matches/{id}/files/{path}                 -> 204
 ```
 
 `GET /me` returns the signed-in user's ID, username, email and creation time.
@@ -249,6 +254,32 @@ in one tick rather than one batch per interval.
 
 How late a match can be ended is therefore one interval, which is invisible
 next to a match measured in tens of minutes.
+
+### Workspaces
+
+A player's workspace is rows in `workspace_files`, keyed by the match, the
+player and the path. Nothing on the API names a workspace any other way, so a
+player cannot construct a request that reaches their opponent's files: the
+isolation is the shape of the key rather than a check somebody remembers to
+write. A path that is not a normalised relative path is refused before it
+reaches the database, and the schema refuses it again.
+
+Both trees are seeded when the clock starts, from `challenge_files`, in the
+same transaction that starts the match. The starting workspace is registered
+alongside its challenge version and is immutable with it, so "both players
+began from the same code" is a property of the data rather than a claim, and
+a match played long ago can still be explained without the repository.
+
+Writes are refused unless the match is active, and that is checked in SQL
+rather than in a handler. Once the clock stops, the tree is the one the judge
+will read, so the window has to close with the clock even if some future
+caller forgets to ask. Reading stays open afterwards: the match is over, not
+hidden.
+
+File contents travel as raw bytes rather than inside JSON. The column is
+`bytea` because a file may hold a NUL byte, and wrapping source files in JSON
+would put base64 on every save. One file is capped at 1 MiB, and a whole
+workspace at 400 files or 8 MiB.
 
 ### Database tests
 

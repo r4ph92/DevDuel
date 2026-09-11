@@ -259,6 +259,25 @@ func (s *server) writeMatchError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, s.log, http.StatusConflict, "not_active",
 			"That match is not running.")
 
+	case errors.Is(err, store.ErrInvalidPath):
+		writeError(w, s.log, http.StatusBadRequest, "invalid_path",
+			"A file path is relative, and cannot climb out of the workspace.")
+
+	case errors.Is(err, store.ErrFileTooLarge):
+		writeError(w, s.log, http.StatusRequestEntityTooLarge, "file_too_large",
+			"That file is larger than this workspace allows.")
+
+	case errors.Is(err, store.ErrWorkspaceFull):
+		writeError(w, s.log, http.StatusConflict, "workspace_full",
+			"This workspace has no room left. Delete something first.")
+
+	case errors.Is(err, store.ErrNoStartingWorkspace):
+		// The catalog is registered at boot with its files, so this is a
+		// deployment that registered a challenge without a workspace.
+		s.log.Error("challenge has no starting workspace", "method", r.Method, "path", r.URL.Path)
+		writeError(w, s.log, http.StatusServiceUnavailable, "unavailable",
+			"That challenge cannot be played right now.")
+
 	case errors.Is(err, match.ErrNoChallenges):
 		// The catalog is registered before the server listens, so this is the
 		// deployment being wrong rather than the request.

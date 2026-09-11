@@ -60,7 +60,11 @@ func newHarness(t *testing.T, secureCookies bool) *harness {
 	if err != nil {
 		t.Fatalf("load challenge: %v", err)
 	}
-	if err := db.RegisterChallenge(t.Context(), spec); err != nil {
+	files, err := spec.Workspace()
+	if err != nil {
+		t.Fatalf("read starting workspace: %v", err)
+	}
+	if err := db.RegisterChallenge(t.Context(), spec, files); err != nil {
 		t.Fatalf("register challenge: %v", err)
 	}
 
@@ -113,6 +117,21 @@ func (h *harness) post(path, body string, cookies ...*http.Cookie) response {
 		h.t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	return h.do(req)
+}
+
+// request sends any method with a raw body, which is how workspace files
+// travel: they are bytes, not JSON.
+func (h *harness) request(method, path, body string, cookies ...*http.Cookie) response {
+	h.t.Helper()
+
+	req, err := http.NewRequestWithContext(h.t.Context(), method, h.srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		h.t.Fatalf("build request: %v", err)
+	}
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}

@@ -66,7 +66,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return fmt.Errorf("no challenges in %s: there would be nothing to play", cfg.challengeDir)
 	}
 	for _, spec := range catalog {
-		if err := db.RegisterChallenge(ctx, spec); err != nil {
+		// The starting workspace is registered with the challenge, so that
+		// starting a match later is a database operation and no instance
+		// needs this directory on disk to hand a player their files.
+		files, err := spec.Workspace()
+		if err != nil {
+			return fmt.Errorf("read the starting workspace for %s: %w", spec.Key(), err)
+		}
+		if err := db.RegisterChallenge(ctx, spec, files); err != nil {
 			return fmt.Errorf("register %s: %w", spec.Key(), err)
 		}
 	}

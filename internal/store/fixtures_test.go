@@ -66,6 +66,15 @@ func seedChallenge(t *testing.T, db *store.Store) challenge.Key {
 	if _, err := db.Pool().Exec(ctx, insertRequirement, key.ID, key.Version); err != nil {
 		t.Fatalf("insert requirement: %v", err)
 	}
+
+	// A starting workspace, because a match cannot start without one: the
+	// transition that starts the clock seeds both players from these rows.
+	const insertFile = `insert into challenge_files (challenge_id, challenge_version, path, content)
+		values ($1, $2, 'server.js', 'console.log("hello")'),
+		       ($1, $2, 'src/todos.js', 'module.exports = {}')`
+	if _, err := db.Pool().Exec(ctx, insertFile, key.ID, key.Version); err != nil {
+		t.Fatalf("insert challenge file: %v", err)
+	}
 	return key
 }
 
