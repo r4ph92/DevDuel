@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/r4ph92/DevDuel/internal/api"
 	"github.com/r4ph92/DevDuel/internal/auth"
+	"github.com/r4ph92/DevDuel/internal/challenge"
+	"github.com/r4ph92/DevDuel/internal/match"
 	"github.com/r4ph92/DevDuel/internal/store"
 	"github.com/r4ph92/DevDuel/internal/store/storetest"
 )
@@ -51,8 +54,19 @@ func newHarness(t *testing.T, secureCookies bool) *harness {
 	db := storetest.New(t)
 	logs := &syncBuffer{}
 
+	// The repository's own challenge, registered the way the server registers
+	// it at boot, because a lobby cannot point at an unregistered challenge.
+	spec, err := challenge.Load("../../challenges/todo-api")
+	if err != nil {
+		t.Fatalf("load challenge: %v", err)
+	}
+	if err := db.RegisterChallenge(t.Context(), spec); err != nil {
+		t.Fatalf("register challenge: %v", err)
+	}
+
 	srv := httptest.NewServer(api.New(api.Config{
 		Auth:          auth.NewService(db),
+		Match:         match.NewService(db, []*challenge.Spec{spec}),
 		Logger:        slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		SecureCookies: secureCookies,
 	}))
@@ -105,12 +119,15 @@ func (h *harness) post(path, body string, cookies ...*http.Cookie) response {
 	return h.do(req)
 }
 
-func (h *harness) get(path string) response {
+func (h *harness) get(path string, cookies ...*http.Cookie) response {
 	h.t.Helper()
 
 	req, err := http.NewRequestWithContext(h.t.Context(), http.MethodGet, h.srv.URL+path, nil)
 	if err != nil {
 		h.t.Fatalf("build request: %v", err)
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
 	}
 	return h.do(req)
 }
@@ -155,6 +172,28 @@ func (h *harness) registerPlayer() response {
 		h.t.Fatalf("register: status %d, body %s", res.status, res.body)
 	}
 	return res
+}
+
+// signIn registers an account and returns its session cookie, so that a test
+// needing two players can have two of them.
+func (h *harness) signIn(name string) *http.Cookie {
+	h.t.Helper()
+
+	email := name + "@example.test"
+	registration := fmt.Sprintf(`{"email":%q,"username":%q,"password":%q}`, email, name, password)
+	if res := h.post("/auth/register", registration); res.status != http.StatusCreated {
+		h.t.Fatalf("register %s: status %d, body %s", name, res.status, res.body)
+	}
+
+	res := h.post("/auth/login", fmt.Sprintf(`{"email":%q,"password":%q}`, email, password))
+	if res.status != http.StatusOK {
+		h.t.Fatalf("log %s in: status %d, body %s", name, res.status, res.body)
+	}
+	cookie := res.sessionCookie()
+	if cookie == nil {
+		h.t.Fatalf("logging %s in set no session cookie", name)
+	}
+	return cookie
 }
 
 func TestHealthAnswersWithoutADatabase(t *testing.T) {

@@ -24,6 +24,22 @@ var (
 	ErrUsernameTaken = errors.New("store: username is taken")
 )
 
+// ErrLobbyCodeTaken means a freshly drawn join code collided with a lobby
+// that is still open. The fix is to draw another, which is why it is its own
+// error rather than a conflict the caller has to interpret.
+var ErrLobbyCodeTaken = errors.New("store: lobby code is taken")
+
+// ErrInUnfinishedMatch means the player is already in a match that has not
+// finished, and a player is in at most one of those at a time.
+var ErrInUnfinishedMatch = errors.New("store: player is already in an unfinished match")
+
+// ErrLobbyFull means both seats of the lobby are taken.
+var ErrLobbyFull = errors.New("store: lobby is full")
+
+// ErrMatchStarted means a lobby operation came too late: the match has
+// already left the lobby.
+var ErrMatchStarted = errors.New("store: match has already started")
+
 // uniqueViolation is the SQLSTATE for a broken unique constraint.
 const uniqueViolation = "23505"
 
@@ -49,6 +65,10 @@ func translate(err error) error {
 			return ErrEmailTaken
 		case "users_username_key":
 			return ErrUsernameTaken
+		case "matches_open_lobby_code_key":
+			return ErrLobbyCodeTaken
+		case "match_players_one_unfinished":
+			return ErrInUnfinishedMatch
 		}
 	}
 	return err

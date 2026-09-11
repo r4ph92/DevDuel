@@ -118,17 +118,27 @@ go run ./cmd/devduelctl db migrate
 go run ./cmd/api
 ```
 
-`API_ADDR`, `DATABASE_URL` and `COOKIE_SECURE` are the whole configuration.
-The server does not migrate on boot, since several instances starting at once
-would all attempt it.
+`API_ADDR`, `DATABASE_URL`, `CHALLENGES_DIR` and `COOKIE_SECURE` are the whole
+configuration. The server does not migrate on boot, since several instances
+starting at once would all attempt it. It does register the challenge catalog
+at boot, because registering is idempotent: the first instance to arrive
+writes, and the rest check that what is there matches what they carry. A
+challenge version that has changed without its version being bumped stops the
+process rather than the match that would have played it.
 
-Four routes exist so far, plus `GET /health`:
+These routes exist so far, plus `GET /health`:
 
 ```
 POST /auth/register   {email, username, password} -> 201 {user}
 POST /auth/login      {email, password}           -> 200 {user, expires_at} + session cookie
 POST /auth/logout                                 -> 204
 GET  /me              session cookie              -> 200 {user}
+
+POST /matches                                     -> 201 {match}
+POST /matches/join    {code}                      -> 200 {match}
+GET  /matches/current                             -> 200 {match}
+GET  /matches/{id}                                -> 200 {match}
+POST /matches/{id}/leave                          -> 204
 ```
 
 `GET /me` returns the signed-in user's ID, username, email and creation time.
@@ -138,10 +148,12 @@ Missing, malformed, expired and revoked sessions all return `401` with code
 including on authentication failure. Logout still clears the cookie.
 
 Protected routes use authentication middleware and read the account from the
-request context. Match and workspace routes must add resource authorization
-when they are introduced: a valid session alone does not grant access to
-another player's resources. Ratings and match history belong to the later
-profile endpoint.
+request context. Match routes add resource authorization on top of that: a
+valid session says who somebody is, never what they may open, so every one of
+them checks that the caller is a player in the match it names. A match
+somebody is not in answers exactly like a match that does not exist, since a
+403 would confirm that an id is real. Workspace routes will do the same.
+Ratings and match history belong to the later profile endpoint.
 
 Passwords are argon2id, 64 MiB over two passes, with the parameters stored in
 the hash so raising them later leaves existing hashes verifiable; a login
@@ -160,6 +172,27 @@ an account.
 of a second by design, which is a denial of service waiting for whoever finds
 it first. That belongs with the rest of the abuse work in M8, and this API
 should not be exposed to the internet before it lands.
+
+### Lobbies
+
+A lobby is a match that has not started: two seats and a join code, created by
+one player and shared with the other however they like. The code is eight
+characters from an alphabet with no `I`, `O`, `0` or `1`, and it is unique
+only among lobbies that are still open, so codes are recycled once a match
+starts. A response drops the code from that moment for the same reason.
+
+A player is in at most one unfinished match at a time. That is a unique index
+in the database rather than a check in Go, because creating and joining race:
+`0003_lobby_membership.sql` keeps a derived flag on each seat and a partial
+unique index over it, and the trigger that maintains the flag takes the match
+row, which is what serialises two people pasting the same code at once.
+
+A lobby does not say which challenge it is for. Waiting would otherwise be a
+way to read the problem early, which is the point of a match having a start.
+Leaving cancels the whole lobby and releases both players; leaving twice is
+not an error, because a retried request should not become one. Starting the
+clock belongs to the match state machine, and the lobby screens belong to the
+web client.
 
 ### Database tests
 
