@@ -223,8 +223,32 @@ writer that took a seat first and then reached for the match would deadlock
 against one going the other way.
 
 `judging` is where this stops for now. Reaching `complete` needs judge results
-and scoring, which are their own issues, and the ticker that fires expiries
-belongs to the timer work; this half only provides the transition it calls.
+and scoring, which are their own issues. Until those land, a match that
+reaches `judging` stays there, and both of its players stay blocked from
+starting another one, since a player may hold only one unfinished match. That
+gap is tracked as its own issue rather than left to be rediscovered.
+
+### Running the worker
+
+```bash
+go run ./cmd/worker
+```
+
+A deadline is a timestamp in the database rather than a countdown running
+somewhere, so nothing happens when one passes unless something looks. This is
+what looks. It reads `DATABASE_URL`, `FINALIZER_INTERVAL` (default 5s) and
+`FINALIZER_BATCH` (default 100), and like the API it does not migrate on boot.
+
+It runs outside the API so a deadline fires once whether three API instances
+are up or none, and so the judge queue has somewhere to live later. A tick
+claims matches with `for update skip locked`: it steps over a match whose
+player happens to be submitting at that exact moment instead of queueing
+behind them, and the next tick collects whatever was skipped. A pass that
+fills its batch looks again immediately, so a backlog left by downtime drains
+in one tick rather than one batch per interval.
+
+How late a match can be ended is therefore one interval, which is invisible
+next to a match measured in tens of minutes.
 
 ### Database tests
 
