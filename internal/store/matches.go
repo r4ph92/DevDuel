@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/r4ph92/DevDuel/internal/id"
 )
@@ -140,6 +141,51 @@ func (q *Queries) Expire(ctx context.Context, match id.ID) (bool, error) {
 		return false, translate(err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// ExpireDue moves every match whose deadline has passed to judging, and
+// returns the ones it moved. It is what the deadline finalizer calls on a
+// tick, and it is the same compare and swap as [Queries.Expire] written for
+// many matches at once: the guard on the state is what makes the next tick a
+// no-op rather than a second transition.
+//
+// A match somebody is already holding is skipped rather than waited for. A
+// player submitting at the deadline holds their match row for the moment that
+// takes, and a tick that queued behind them would hold up every other match
+// that is also due. Whoever gets there first moves the match, and skipping
+// costs nothing because the next tick picks up whatever was skipped.
+//
+// The limit bounds how many rows one statement locks, so a backlog cannot
+// turn a tick into a long write lock over the whole table.
+func (q *Queries) ExpireDue(ctx context.Context, limit int) ([]id.ID, error) {
+	const expire = `update matches set state = 'judging'
+		where id in (
+			select id from matches
+			where state = 'active' and deadline_at <= now()
+			order by deadline_at
+			limit $1
+			for update skip locked
+		)
+		returning id`
+
+	rows, err := q.db.Query(ctx, expire, limit)
+	if err != nil {
+		return nil, translate(err)
+	}
+	defer rows.Close()
+
+	var expired []id.ID
+	for rows.Next() {
+		var match id.ID
+		if err := rows.Scan(&match); err != nil {
+			return nil, fmt.Errorf("store: read expired match: %w", err)
+		}
+		expired = append(expired, match)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: expire due matches: %w", err)
+	}
+	return expired, nil
 }
 
 // lockMatchForPlayer takes the match row and then returns the match, only to
