@@ -19,6 +19,8 @@ import (
 
 	"github.com/r4ph92/DevDuel/internal/api"
 	"github.com/r4ph92/DevDuel/internal/auth"
+	"github.com/r4ph92/DevDuel/internal/challenge"
+	"github.com/r4ph92/DevDuel/internal/match"
 	"github.com/r4ph92/DevDuel/internal/store"
 )
 
@@ -52,10 +54,29 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer db.Close()
 
+	// Registering the catalog is idempotent, unlike migrating, so every
+	// instance does it as it starts rather than waiting for an operator. A
+	// challenge version that has changed without its version being bumped
+	// stops the process here, before anything can play it.
+	catalog, err := challenge.LoadAll(cfg.challengeDir)
+	if err != nil {
+		return err
+	}
+	if len(catalog) == 0 {
+		return fmt.Errorf("no challenges in %s: there would be nothing to play", cfg.challengeDir)
+	}
+	for _, spec := range catalog {
+		if err := db.RegisterChallenge(ctx, spec); err != nil {
+			return fmt.Errorf("register %s: %w", spec.Key(), err)
+		}
+	}
+	log.Info("challenge catalog registered", "challenges", len(catalog), "dir", cfg.challengeDir)
+
 	srv := &http.Server{
 		Addr: cfg.addr,
 		Handler: api.New(api.Config{
 			Auth:          auth.NewService(db),
+			Match:         match.NewService(db, catalog),
 			Logger:        log,
 			SecureCookies: cfg.secureCookies,
 		}),
@@ -104,6 +125,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 type config struct {
 	addr          string
 	databaseURL   string
+	challengeDir  string
 	secureCookies bool
 }
 
@@ -111,6 +133,7 @@ type config struct {
 const (
 	envAddr          = "API_ADDR"
 	envDatabaseURL   = "DATABASE_URL"
+	envChallengeDir  = "CHALLENGES_DIR"
 	envSecureCookies = "COOKIE_SECURE"
 )
 
@@ -118,6 +141,9 @@ func configFromEnv() (config, error) {
 	cfg := config{
 		addr:        orElse(os.Getenv(envAddr), ":8080"),
 		databaseURL: os.Getenv(envDatabaseURL),
+		// The repository layout, which is what a developer running this from
+		// a checkout has. An image sets it to wherever it copied them.
+		challengeDir: orElse(os.Getenv(envChallengeDir), "challenges"),
 		// Secure by default, so that forgetting to configure it fails on a
 		// developer's laptop rather than in front of the internet.
 		secureCookies: true,

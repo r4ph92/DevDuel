@@ -3,6 +3,7 @@ package store_test
 import (
 	"testing"
 
+	"github.com/r4ph92/DevDuel/internal/challenge"
 	"github.com/r4ph92/DevDuel/internal/id"
 	"github.com/r4ph92/DevDuel/internal/store"
 )
@@ -25,21 +26,8 @@ func seed(t *testing.T, db *store.Store) match {
 	t.Helper()
 	ctx := t.Context()
 
-	m := match{id: id.New(), challenge: "todo-api", version: 1}
-
-	const insertChallenge = `insert into challenges
-		(id, version, category, difficulty, duration, image_tag)
-		values ($1, $2, 'debugging', 'medium', '45 minutes', 'devduel/todo-api:1')`
-	if _, err := db.Pool().Exec(ctx, insertChallenge, m.challenge, m.version); err != nil {
-		t.Fatalf("insert challenge: %v", err)
-	}
-
-	const insertRequirement = `insert into requirements
-		(challenge_id, challenge_version, key, position, title, description, weight, broken)
-		values ($1, $2, 'health', 0, 'GET /health answers', 'it answers', 1, false)`
-	if _, err := db.Pool().Exec(ctx, insertRequirement, m.challenge, m.version); err != nil {
-		t.Fatalf("insert requirement: %v", err)
-	}
+	key := seedChallenge(t, db)
+	m := match{id: id.New(), challenge: key.ID, version: key.Version}
 
 	const insertMatch = `insert into matches (id, challenge_id, challenge_version, lobby_code)
 		values ($1, $2, $3, $4)`
@@ -56,6 +44,29 @@ func seed(t *testing.T, db *store.Store) match {
 		}
 	}
 	return m
+}
+
+// seedChallenge registers a one-requirement challenge for matches to point at.
+func seedChallenge(t *testing.T, db *store.Store) challenge.Key {
+	t.Helper()
+	ctx := t.Context()
+
+	key := challenge.Key{ID: "todo-api", Version: 1}
+
+	const insertChallenge = `insert into challenges
+		(id, version, category, difficulty, duration, image_tag)
+		values ($1, $2, 'debugging', 'medium', '45 minutes', 'devduel/todo-api:1')`
+	if _, err := db.Pool().Exec(ctx, insertChallenge, key.ID, key.Version); err != nil {
+		t.Fatalf("insert challenge: %v", err)
+	}
+
+	const insertRequirement = `insert into requirements
+		(challenge_id, challenge_version, key, position, title, description, weight, broken)
+		values ($1, $2, 'health', 0, 'GET /health answers', 'it answers', 1, false)`
+	if _, err := db.Pool().Exec(ctx, insertRequirement, key.ID, key.Version); err != nil {
+		t.Fatalf("insert requirement: %v", err)
+	}
+	return key
 }
 
 func seedUser(t *testing.T, db *store.Store) id.ID {
