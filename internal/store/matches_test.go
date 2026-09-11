@@ -270,6 +270,166 @@ func TestTransitionsRefuseTheWrongStateAndStrangers(t *testing.T) {
 	}
 }
 
+func TestExpireDueMovesOnlyMatchesPastTheirDeadline(t *testing.T) {
+	t.Parallel()
+	l := newLobbyFixture(t)
+	due, _, _ := l.started(t, "DUEONE23")
+	running, runningHost, _ := l.started(t, "RUNNIN23")
+	l.expireNow(t, due)
+
+	expired, err := l.db.ExpireDue(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("expire due: %v", err)
+	}
+	if len(expired) != 1 || expired[0] != due {
+		t.Fatalf("expired %v, want just the match past its deadline (%v)", expired, due)
+	}
+
+	// The match still on the clock is untouched, and a second tick has
+	// nothing left to do.
+	untouched, err := l.db.MatchForPlayer(t.Context(), running, runningHost)
+	if err != nil {
+		t.Fatalf("read the match still on the clock: %v", err)
+	}
+	if untouched.State != store.MatchActive {
+		t.Errorf("a match still on the clock is %q, want active", untouched.State)
+	}
+	again, err := l.db.ExpireDue(t.Context(), 10)
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if len(again) != 0 {
+		t.Errorf("a second tick expired %v, want nothing", again)
+	}
+}
+
+// A player submitting at the deadline holds their own match row for the
+// moment that takes. A tick must step over that match rather than queue
+// behind it, or one slow submission delays every other match that is due.
+func TestExpireDueSkipsAMatchSomebodyIsHolding(t *testing.T) {
+	t.Parallel()
+	l := newLobbyFixture(t)
+	held, _, _ := l.started(t, "HELDON23")
+	free, _, _ := l.started(t, "FREEONE3")
+	l.expireNow(t, held)
+	l.expireNow(t, free)
+
+	ctx := t.Context()
+	holder, err := l.db.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.WithoutCancel(ctx)) }()
+
+	if _, err := holder.Exec(ctx, `select 1 from matches where id = $1 for update`, held); err != nil {
+		t.Fatalf("hold the match: %v", err)
+	}
+
+	// This would block forever instead of skipping, if the query waited.
+	expired, err := l.db.ExpireDue(ctx, 10)
+	if err != nil {
+		t.Fatalf("expire due while a match is held: %v", err)
+	}
+	if len(expired) != 1 || expired[0] != free {
+		t.Fatalf("expired %v, want only the match nobody was holding (%v)", expired, free)
+	}
+
+	// Once the holder is done, the skipped match is picked up by the next
+	// tick, which is why skipping loses nothing.
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	next, err := l.db.ExpireDue(ctx, 10)
+	if err != nil {
+		t.Fatalf("next tick: %v", err)
+	}
+	if len(next) != 1 || next[0] != held {
+		t.Errorf("next tick expired %v, want the previously held match (%v)", next, held)
+	}
+}
+
+func TestExpireDueStopsAtTheLimit(t *testing.T) {
+	t.Parallel()
+	l := newLobbyFixture(t)
+	for _, code := range []string{"BATCH234", "BATCH235", "BATCH236"} {
+		match, _, _ := l.started(t, code)
+		l.expireNow(t, match)
+	}
+
+	first, err := l.db.ExpireDue(t.Context(), 2)
+	if err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if len(first) != 2 {
+		t.Errorf("first tick expired %d matches, want the limit of 2", len(first))
+	}
+
+	second, err := l.db.ExpireDue(t.Context(), 2)
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if len(second) != 1 {
+		t.Errorf("second tick expired %d matches, want the remaining 1", len(second))
+	}
+}
+
+// The same race as the single-match transition, through the batch path this
+// time: a tick and a final submission land together, and only one of them may
+// move the match.
+func TestATickAndASubmissionRaceToOneTransition(t *testing.T) {
+	t.Parallel()
+	l := newLobbyFixture(t)
+	match, host, guest := l.started(t, "TICKRA23")
+	if _, _, err := l.db.Submit(t.Context(), match, host); err != nil {
+		t.Fatalf("host submits: %v", err)
+	}
+	l.expireNow(t, match)
+
+	ctx := context.WithoutCancel(t.Context())
+	moved := make(chan int, 2)
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+
+	go func() {
+		<-start
+		_, judging, err := l.db.Submit(ctx, match, guest)
+		if err != nil && !errors.Is(err, store.ErrMatchNotActive) {
+			errs <- err
+		}
+		if judging {
+			moved <- 1
+		} else {
+			moved <- 0
+		}
+	}()
+	go func() {
+		<-start
+		expired, err := l.db.ExpireDue(ctx, 10)
+		if err != nil {
+			errs <- err
+		}
+		moved <- len(expired)
+	}()
+	close(start)
+
+	total := <-moved + <-moved
+	close(errs)
+	for err := range errs {
+		t.Errorf("racing a tick against a submission: %v", err)
+	}
+	if total != 1 {
+		t.Errorf("%d callers moved the match, want exactly 1", total)
+	}
+
+	final, err := l.db.MatchForPlayer(t.Context(), match, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.State != store.MatchJudging {
+		t.Errorf("state = %q, want judging", final.State)
+	}
+}
+
 // expireNow backdates the clock so the deadline has passed. The start moves
 // with it, because the schema refuses a deadline that precedes the start.
 func (l lobby) expireNow(t *testing.T, match id.ID) {
