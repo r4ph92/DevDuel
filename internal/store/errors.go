@@ -49,6 +49,21 @@ var ErrLobbyIncomplete = errors.New("store: lobby does not have two players")
 // submit to: it has either not started or already finished.
 var ErrMatchNotActive = errors.New("store: match is not active")
 
+// ErrNoStartingWorkspace means the challenge a match points at has no files
+// registered, so starting it would hand both players an empty editor. It is
+// a deployment that never registered a workspace, not anything a player did.
+var ErrNoStartingWorkspace = errors.New("store: challenge has no starting workspace")
+
+// ErrWorkspaceFull means the workspace is at its file count or byte ceiling.
+var ErrWorkspaceFull = errors.New("store: workspace is full")
+
+// ErrFileTooLarge means one file is over the ceiling the schema allows.
+var ErrFileTooLarge = errors.New("store: file is too large")
+
+// ErrInvalidPath means a workspace path is not a normalised relative path,
+// so no file could live at it.
+var ErrInvalidPath = errors.New("store: invalid workspace path")
+
 // uniqueViolation is the SQLSTATE for a broken unique constraint.
 const uniqueViolation = "23505"
 

@@ -23,7 +23,11 @@ func newService(t *testing.T) (*match.Service, *store.Store) {
 	if err != nil {
 		t.Fatalf("load challenge: %v", err)
 	}
-	if err := db.RegisterChallenge(t.Context(), spec); err != nil {
+	files, err := spec.Workspace()
+	if err != nil {
+		t.Fatalf("read starting workspace: %v", err)
+	}
+	if err := db.RegisterChallenge(t.Context(), spec, files); err != nil {
 		t.Fatalf("register challenge: %v", err)
 	}
 	return match.NewService(db, []*challenge.Spec{spec}), db

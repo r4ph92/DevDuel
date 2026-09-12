@@ -67,6 +67,14 @@ func (q *Queries) ReadyUp(ctx context.Context, match, user id.ID) (Match, bool, 
 		}
 		started = tag.RowsAffected() == 1
 
+		// Seeded by the call that started the match, in the same transaction,
+		// so a match is never briefly active with nothing in it to edit.
+		if started {
+			if err := q.seedWorkspaces(ctx, match); err != nil {
+				return err
+			}
+		}
+
 		out, err = q.matchByID(ctx, match)
 		return err
 	})
@@ -186,6 +194,36 @@ func (q *Queries) ExpireDue(ctx context.Context, limit int) ([]id.ID, error) {
 		return nil, fmt.Errorf("store: expire due matches: %w", err)
 	}
 	return expired, nil
+}
+
+// seedWorkspaces gives both players the challenge's starting files.
+//
+// One statement, so the bytes never travel through this process: they are
+// already in the database, next to the challenge version that a match points
+// at. Both players are seeded from the same rows in the same transaction,
+// which is what makes "you both started from the same code" a fact rather
+// than a claim.
+//
+// A challenge whose workspace was never registered would seed nothing and
+// hand two players an empty editor, so that is refused here instead.
+func (q *Queries) seedWorkspaces(ctx context.Context, match id.ID) error {
+	const seed = `insert into workspace_files (match_id, user_id, path, content)
+		select p.match_id, p.user_id, f.path, f.content
+		from match_players p
+		join matches m on m.id = p.match_id
+		join challenge_files f
+		  on f.challenge_id = m.challenge_id and f.challenge_version = m.challenge_version
+		where p.match_id = $1
+		on conflict do nothing`
+
+	tag, err := q.db.Exec(ctx, seed, match)
+	if err != nil {
+		return translate(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoStartingWorkspace
+	}
+	return nil
 }
 
 // lockMatchForPlayer takes the match row and then returns the match, only to
